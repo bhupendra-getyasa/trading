@@ -1,17 +1,14 @@
-FROM node:22
+FROM node:22-alpine
 
 WORKDIR /app
 
-# Install global dev tools
-RUN npm install -g nodemon
-
 COPY package.json package-lock.json ./
 
-COPY packages ./packages
-COPY apps ./apps
+COPY apps/ingestion-service ./apps/ingestion-service
+COPY packages/shared ./packages/shared
 
-RUN npm install
+RUN npm install --production
 
 WORKDIR /app/apps/websocket-service
 
-CMD ["nodemon", "src/index.js"]
+CMD ["node", "src/index.js"]
