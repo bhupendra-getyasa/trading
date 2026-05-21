@@ -1,0 +1,18 @@
+{
+  "name": "@trading/shared",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "dev": "node index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "bullmq": "^5.76.8",
+    "dotenv": "^17.4.2",
+    "ioredis": "^5.10.1",
+    "pg": "^8.20.0"
+  }
+}

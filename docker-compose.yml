@@ -1,0 +1,52 @@
+services:
+
+  redis:
+    image: redis:7
+    container_name: redis
+
+    ports:
+      - "6379:6379"
+
+  ingestion-service:
+    build:
+      context: .
+      dockerfile: apps/ingestion-service/Dockerfile
+
+    container_name: ingestion-service
+
+    ports:
+      - "4001:4001"
+
+    environment:
+      DB_HOST: trading-db.cip64s8oy79k.us-east-1.rds.amazonaws.com
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: QwerPoiu12
+      DB_NAME: trading
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+    depends_on:
+      - redis
+
+  websocket-service:
+    build:
+      context: .
+      dockerfile: apps/websocket-service/Dockerfile
+
+    container_name: websocket-service
+
+    ports:
+      - "4000:4000"
+
+    environment:
+      DB_HOST: trading-db.cip64s8oy79k.us-east-1.rds.amazonaws.com
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: QwerPoiu12
+      DB_NAME: trading
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+    depends_on:
+      - redis

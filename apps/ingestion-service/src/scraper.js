@@ -1,0 +1,66 @@
+const { chromium } = require('playwright');
+
+const WATCHLIST_URL =
+    'https://www.tradingview.com/watchlists/330160510/';
+
+let browser;
+let page;
+
+async function initBrowser() {
+    browser = await chromium.launch({
+        headless: true,
+    });
+
+    const context = await browser.newContext();
+
+    page = await context.newPage();
+
+    await page.goto(WATCHLIST_URL, {
+        waitUntil: 'domcontentloaded',
+    });
+}
+
+async function scrapeStocks() {
+    await page.waitForSelector('[data-qa-id="column-symbol"]');
+
+    return await page.evaluate(() => {
+        const rows = document.querySelectorAll('[data-qa-id="column-symbol"]');
+
+        return Array.from(rows).map((row) => {
+            const parent = row.parentElement;
+
+            const getText = (id) => {
+                const cell = parent?.querySelector(`[data-qa-id="${id}"]`);
+                return (
+                    cell?.textContent
+                        ?.replace(/\u202A|\u202C/g, '')
+                        .replace(/\s+/g, ' ')
+                        .trim() || ''
+                );
+            };
+
+            const symbol = row.querySelector('a span')?.textContent?.trim() || '';
+            const spans = row.querySelectorAll('span');
+            const companyName = spans[spans.length - 1]?.textContent?.trim() || '';
+            const stockUrl = row.querySelector('a')?.getAttribute('href') || '';
+
+            return {
+                symbol,
+                companyName,
+                stockUrl: stockUrl ? `https://www.tradingview.com${stockUrl}` : '',
+                lastPrice: getText('column-last_price'),
+                changePercent: getText('column-change_percent'),
+                change: getText('column-change'),
+                volume: getText('column-volume'),
+                avgVolume: getText('column-average_volume'),
+                marketCap: getText('column-market_cap_basic'),
+                createdAt: new Date().toISOString(),
+            };
+        });
+    });
+}
+
+module.exports = {
+    initBrowser,
+    scrapeStocks,
+};

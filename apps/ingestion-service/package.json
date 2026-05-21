@@ -1,0 +1,17 @@
+{
+  "name": "@trading/ingestion-service",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "dev": "node src/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@trading/shared": "^1.0.0",
+    "node-cron": "^4.2.1",
+    "playwright": "^1.60.0"
+  }
+}

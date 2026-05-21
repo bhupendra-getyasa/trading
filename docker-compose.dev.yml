@@ -1,0 +1,52 @@
+services:
+
+  redis:
+    image: redis:7
+    container_name: redis
+
+    ports:
+      - "6379:6379"
+
+  ingestion-service:
+    build:
+      context: .
+      dockerfile: apps/ingestion-service/Dockerfile
+
+    container_name: ingestion-service
+
+    ports:
+      - "4001:4001"
+
+    volumes:
+      - ./apps/ingestion-service:/app/apps/ingestion-service  # JS hot reload
+      - ./packages/shared:/app/packages/shared     
+    command: nodemon src/index.js
+
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+    depends_on:
+      - redis
+
+  websocket-service:
+    build:
+      context: .
+      dockerfile: apps/websocket-service/Dockerfile
+
+    container_name: websocket-service
+
+    ports:
+      - "4000:4000"
+
+    volumes:
+      - ./apps/websocket-service:/app/apps/websocket-service  # JS hot reload
+      - ./packages/shared:/app/packages/shared     
+    command: nodemon src/index.js
+
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+    depends_on:
+      - redis
