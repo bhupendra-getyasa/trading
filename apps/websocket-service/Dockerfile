@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY package.json package-lock.json ./
 
-COPY apps/ingestion-service ./apps/ingestion-service
+COPY apps/websocket-service ./apps/websocket-service
 COPY packages/shared ./packages/shared
 
 RUN npm install --production
