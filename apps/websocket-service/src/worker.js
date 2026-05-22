@@ -4,7 +4,6 @@ const { broadcast } = require('index.js');
 const { Worker } = require('bullmq');
 
 const { connection } = require('@trading/shared');
-console.log('connection: ', connection);
 
 const worker = new Worker(
   'socket-queue',

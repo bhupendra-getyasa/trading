@@ -11,4 +11,4 @@ RUN npm install --production
 
 WORKDIR /app/apps/websocket-service
 
-CMD ["node", "src/index.js"]
+CMD ["node", "--max-old-space-size=256", "src/index.js"]

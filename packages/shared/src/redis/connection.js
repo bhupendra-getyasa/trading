@@ -4,9 +4,6 @@ require('dotenv').config();
 const REDIS_HOST = process.env.REDIS_HOST || 'redis';
 const REDIS_PORT = Number(process.env.REDIS_PORT) || 6379;
 
-console.log('REDIS_HOST: ', REDIS_HOST);
-console.log('REDIS_PORT: ', REDIS_PORT);
-
 const connection = new IORedis({
     host: REDIS_HOST,
     port: REDIS_PORT,

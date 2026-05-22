@@ -3,9 +3,15 @@ services:
   redis:
     image: redis:7
     container_name: redis
+    mem_limit: 100m
 
     ports:
       - "6379:6379"
+
+    volumes:
+      - redis_data:/data
+
+    command: redis-server --appendonly yes
 
   ingestion-service:
     build:
@@ -13,6 +19,7 @@ services:
       dockerfile: apps/ingestion-service/Dockerfile
 
     container_name: ingestion-service
+    mem_limit: 400m
 
     ports:
       - "4001:4001"
@@ -35,6 +42,7 @@ services:
       dockerfile: apps/websocket-service/Dockerfile
 
     container_name: websocket-service
+    mem_limit: 250m
 
     ports:
       - "4000:4000"
@@ -50,3 +58,6 @@ services:
 
     depends_on:
       - redis
+
+volumes:
+  redis_data:
