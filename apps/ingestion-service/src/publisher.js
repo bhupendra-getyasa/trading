@@ -7,7 +7,7 @@ const {
 
 async function publishStock(data) {
 
-    // await socketQueue.add('socket-update', data);
+    await socketQueue.add('stock-update', data);
 
     await stockQueue.add('stock-update', data);
 

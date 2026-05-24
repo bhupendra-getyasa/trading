@@ -17,6 +17,7 @@ async function loadFormulas(pool) {
           'compare_field', c.compare_field,
           'function_name', c.function_name
         )
+        ORDER BY c.sequence_no
       ) AS conditions
 
     FROM indicator_formulas f

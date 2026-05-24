@@ -10,7 +10,10 @@ COPY apps/ingestion-service ./apps/ingestion-service
 COPY packages/shared ./packages/shared
 
 # 3. Install dependencies at ROOT (IMPORTANT)
-RUN npm install --production
+# RUN npm install --production
+
+# Install only production deps
+RUN npm ci --omit=dev
 
 # Install Playwright browsers + Linux deps
 RUN npx playwright install --with-deps chromium

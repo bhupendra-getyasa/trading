@@ -9,6 +9,21 @@ let page;
 async function initBrowser() {
     browser = await chromium.launch({
         headless: true,
+        args: [
+            '--disable-dev-shm-usage',
+            '--disable-setuid-sandbox',
+            '--no-sandbox',
+            '--disable-gpu',
+            '--disable-extensions',
+            '--disable-background-networking',
+            '--disable-background-timer-throttling',
+            '--disable-renderer-backgrounding',
+            '--disable-sync',
+            '--metrics-recording-only',
+            '--mute-audio',
+            '--no-first-run',
+            '--disable-default-apps',
+        ],
     });
 
     const context = await browser.newContext();
