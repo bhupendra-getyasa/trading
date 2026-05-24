@@ -35,7 +35,7 @@ async function start() {
 
     cron.schedule(
       //   '*/1 * * * *',
-      '*/1 9-13 * * 0-4',
+      '*/1 9-12 * * 0-4',
       async () => {
         console.log(`[${new Date().toISOString()}] Scheduling scrape job`);
         await stockQueue.add('scrape-job', {});
