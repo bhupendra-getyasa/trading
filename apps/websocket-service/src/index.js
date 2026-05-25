@@ -1,11 +1,16 @@
 const express = require('express');
 const http = require('http');
+const cors = require('cors');
 require('dotenv').config();
 
 const { init } = require('./socket');
 require('./worker');
 
 const app = express();
+
+app.use(cors({
+  origin: '*'
+}));
 
 const server = http.createServer(app);
 
