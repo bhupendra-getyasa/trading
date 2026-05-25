@@ -92,14 +92,14 @@ const worker = new Worker(
 
           await socketQueue.add('top-performers', top10);
           
-          await saveTopPerformers(
-            pool,
-            top10
-          );
+          // await saveTopPerformers(
+          //   pool,
+          //   top10
+          // );
 
-          console.log(
-            "Top performers updated"
-          );
+          // console.log(
+          //   "Top performers updated"
+          // );
 
         } catch (err) {
           console.error('Error inserting trades:', err);
