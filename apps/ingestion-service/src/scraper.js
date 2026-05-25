@@ -35,44 +35,126 @@ async function initBrowser() {
     });
 }
 
+// async function scrapeStocks() {
+//     await page.waitForSelector('[data-qa-id="column-symbol"]');
+
+//     return await page.evaluate(() => {
+//         const rows = document.querySelectorAll('[data-qa-id="column-symbol"]');
+
+//         return Array.from(rows).map((row) => {
+//             const parent = row.parentElement;
+
+//             const getText = (id) => {
+//                 const cell = parent?.querySelector(`[data-qa-id="${id}"]`);
+//                 return (
+//                     cell?.textContent
+//                         ?.replace(/\u202A|\u202C/g, '')
+//                         .replace(/\s+/g, ' ')
+//                         .trim() || ''
+//                 );
+//             };
+
+//             const symbol = row.querySelector('a span')?.textContent?.trim() || '';
+//             const spans = row.querySelectorAll('span');
+//             const companyName = spans[spans.length - 1]?.textContent?.trim() || '';
+//             const stockUrl = row.querySelector('a')?.getAttribute('href') || '';
+
+//             return {
+//                 symbol,
+//                 companyName,
+//                 stockUrl: stockUrl ? `https://www.tradingview.com${stockUrl}` : '',
+//                 lastPrice: getText('column-last_price'),
+//                 changePercent: getText('column-change_percent'),
+//                 change: getText('column-change'),
+//                 volume: getText('column-volume'),
+//                 avgVolume: getText('column-average_volume'),
+//                 marketCap: getText('column-market_cap_basic'),
+//                 createdAt: new Date().toISOString(),
+//             };
+//         });
+//     });
+// }
+
 async function scrapeStocks() {
     await page.waitForSelector('[data-qa-id="column-symbol"]');
 
-    return await page.evaluate(() => {
-        const rows = document.querySelectorAll('[data-qa-id="column-symbol"]');
+    const allStocks = new Map();
 
-        return Array.from(rows).map((row) => {
-            const parent = row.parentElement;
+    let previousCount = 0;
 
-            const getText = (id) => {
-                const cell = parent?.querySelector(`[data-qa-id="${id}"]`);
-                return (
-                    cell?.textContent
-                        ?.replace(/\u202A|\u202C/g, '')
-                        .replace(/\s+/g, ' ')
-                        .trim() || ''
-                );
-            };
+    while (true) {
+        // Extract currently rendered rows
+        const stocks = await page.evaluate(() => {
+            const rows = document.querySelectorAll(
+                '[data-qa-id="column-symbol"]'
+            );
 
-            const symbol = row.querySelector('a span')?.textContent?.trim() || '';
-            const spans = row.querySelectorAll('span');
-            const companyName = spans[spans.length - 1]?.textContent?.trim() || '';
-            const stockUrl = row.querySelector('a')?.getAttribute('href') || '';
+            return Array.from(rows).map((row) => {
+                const parent = row.parentElement;
 
-            return {
-                symbol,
-                companyName,
-                stockUrl: stockUrl ? `https://www.tradingview.com${stockUrl}` : '',
-                lastPrice: getText('column-last_price'),
-                changePercent: getText('column-change_percent'),
-                change: getText('column-change'),
-                volume: getText('column-volume'),
-                avgVolume: getText('column-average_volume'),
-                marketCap: getText('column-market_cap_basic'),
-                createdAt: new Date().toISOString(),
-            };
+                const getText = (id) => {
+                    const cell = parent?.querySelector(
+                        `[data-qa-id="${id}"]`
+                    );
+
+                    return (
+                        cell?.textContent
+                            ?.replace(/\u202A|\u202C/g, '')
+                            .replace(/\s+/g, ' ')
+                            .trim() || ''
+                    );
+                };
+
+                const symbol =
+                    row.querySelector('a span')?.textContent?.trim() || '';
+
+                const spans = row.querySelectorAll('span');
+
+                const companyName =
+                    spans[spans.length - 1]?.textContent?.trim() || '';
+
+                const stockUrl =
+                    row.querySelector('a')?.getAttribute('href') || '';
+
+                return {
+                    symbol,
+                    companyName,
+                    stockUrl: stockUrl
+                        ? `https://www.tradingview.com${stockUrl}`
+                        : '',
+                    lastPrice: getText('column-last_price'),
+                    changePercent: getText('column-change_percent'),
+                    change: getText('column-change'),
+                    volume: getText('column-volume'),
+                    avgVolume: getText('column-average_volume'),
+                    marketCap: getText('column-market_cap_basic'),
+                    createdAt: new Date().toISOString(),
+                };
+            });
         });
-    });
+
+        // Store unique stocks
+        for (const stock of stocks) {
+            allStocks.set(stock.symbol, stock);
+        }
+
+        // Stop if no new rows appear
+        if (allStocks.size === previousCount) {
+            break;
+        }
+
+        previousCount = allStocks.size;
+
+        // Scroll down
+        await page.evaluate(() => {
+            window.scrollBy(0, window.innerHeight * 2);
+        });
+
+        // Wait for lazy-loaded rows
+        await page.waitForTimeout(1000);
+    }
+
+    return Array.from(allStocks.values());
 }
 
 module.exports = {
