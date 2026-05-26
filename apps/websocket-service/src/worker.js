@@ -11,7 +11,6 @@ const {
 const worker = new Worker(
   'socket-queue',
   async (job) => {
-    console.log(job.name, job.data);
 
     if (job.name === 'stock-update') {
       broadcast(job.data);

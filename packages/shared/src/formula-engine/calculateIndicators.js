@@ -16,7 +16,7 @@ async function calculateIndicators(
         stock
       );
 
-    if (!matched) continue;
+    // if (!matched) continue;
 
     indicators[
       formula.indicator_name

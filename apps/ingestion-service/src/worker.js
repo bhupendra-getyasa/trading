@@ -65,20 +65,21 @@ const worker = new Worker(
           )
           VALUES ${placeholders}
           ON CONFLICT (id) DO NOTHING
+          RETURNING *;
         `;
     
         try {
-          await pool.query(query, values);
+          const { rows: stocks } = await pool.query(query, values);
           console.log(`Inserted ${trades.length} trades into DB`);
     
-          await pool.query(`REFRESH MATERIALIZED VIEW CONCURRENTLY latest_market_view;`);
-          console.log("latest_market_view refreshed");
+          // await pool.query(`REFRESH MATERIALIZED VIEW CONCURRENTLY latest_market_view;`);
+          // console.log("latest_market_view refreshed");
 
-          const { rows: stocks } =
-          await pool.query(`
-            SELECT *
-            FROM latest_market_view
-          `);
+          // const { rows: stocks } =
+          // await pool.query(`
+          //   SELECT *
+          //   FROM latest_market_view
+          // `);
 
           const formulas = await loadFormulas(pool);
             

@@ -14,4 +14,4 @@ RUN npm ci --omit=dev
 
 WORKDIR /app/apps/websocket-service
 
-CMD ["node", "--max-old-space-size=256", "src/index.js"]
+CMD ["node", "src/index.js"]

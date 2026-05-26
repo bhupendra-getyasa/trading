@@ -57,21 +57,21 @@ async function processTopPerformers(
 
     const stock =
     enrichStock(
-        normalized,
-        indicators
+      normalized,
+      indicators
     );
 
     // --------------------------------
     // Apply filters
     // --------------------------------
 
-    if (
-      !passesHardFilters(
-        stock
-      )
-    ) {
-      continue;
-    }
+    // if (
+    //   !passesHardFilters(
+    //     stock
+    //   )
+    // ) {
+    //   continue;
+    // }
 
     // --------------------------------
     // Calculate ranking score
@@ -103,7 +103,7 @@ async function processTopPerformers(
   // --------------------------------
 
   return results
-    .slice(0, 10)
+    // .slice(0, 10)
     .map((stock, index) => ({
       rankNo: index + 1,
       ...stock,
@@ -111,25 +111,30 @@ async function processTopPerformers(
 }
 
 // async function topStock () {
-//     const { rows: stocks } =
-//         await pool.query(`
-//         SELECT *
-//         FROM latest_market_view
-//     `);
+//   const { rows: stocks } =
+//     await pool.query(`
+//       SELECT *
+//       FROM (
+//         SELECT DISTINCT ON (symbol) *
+//         FROM public.market_stock_snapshots
+//         ORDER BY symbol, created_at DESC
+//       ) t
+//       ORDER BY created_at DESC;
+//   `);
 
-//     const formulas =
-//     await loadFormulas(pool);
-    
-//     const top10 =
-//     await processTopPerformers(
-//         stocks,
-//         formulas
-//     );
-//     console.log('top10: ', top10);
+//   const formulas =
+//   await loadFormulas(pool);
+  
+//   const top10 =
+//   await processTopPerformers(
+//     stocks,
+//     formulas
+//   );
+//   console.log('top10: ', top10);
 // }
 
 // topStock();
 
 module.exports = {
-    processTopPerformers
+  processTopPerformers
 }

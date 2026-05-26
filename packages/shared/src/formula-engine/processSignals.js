@@ -74,5 +74,3 @@ async function processSignals(pool) {
 module.exports = {
   processSignals
 };
-
-// processSignals(pool).then((res) => console.log(res)).catch((err) => console.log(err));

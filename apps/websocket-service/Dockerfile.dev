@@ -1,0 +1,14 @@
+FROM node:22-slim
+
+WORKDIR /app
+
+# copy only dependency files first (for caching)
+COPY package.json package-lock.json ./
+
+# install ALL workspace deps
+RUN npm install
+
+# copy source later (but in dev this will be overridden by bind mount)
+COPY . .
+
+CMD ["npm", "run", "websocket:dev"]

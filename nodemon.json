@@ -1,0 +1,5 @@
+{
+  "watch": ["src", "../../packages"],
+  "ext": "js,json",
+  "legacyWatch": true
+}

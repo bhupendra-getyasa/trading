@@ -7,46 +7,60 @@ services:
     ports:
       - "6379:6379"
 
+    volumes:
+      - redis_data:/data
+
+    command: redis-server --appendonly yes
+
   ingestion-service:
     build:
       context: .
-      dockerfile: apps/ingestion-service/Dockerfile
+      dockerfile: apps/ingestion-service/Dockerfile.dev
 
     container_name: ingestion-service
 
     ports:
       - "4001:4001"
 
-    volumes:
-      - ./apps/ingestion-service:/app/apps/ingestion-service  # JS hot reload
-      - ./packages/shared:/app/packages/shared     
-    command: nodemon src/index.js
+    env_file:
+      - .env
 
-    environment:
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+
+    working_dir: /app/apps/ingestion-service
+
+    command: sh -c "npm install && npx nodemon src/index.js --legacy-watch"
 
     depends_on:
       - redis
 
+
   websocket-service:
     build:
       context: .
-      dockerfile: apps/websocket-service/Dockerfile
+      dockerfile: apps/websocket-service/Dockerfile.dev
 
     container_name: websocket-service
 
     ports:
       - "4000:4000"
 
-    volumes:
-      - ./apps/websocket-service:/app/apps/websocket-service  # JS hot reload
-      - ./packages/shared:/app/packages/shared     
-    command: nodemon src/index.js
+    env_file:
+      - .env
 
-    environment:
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+
+    working_dir: /app/apps/websocket-service
+
+    command: sh -c "npm install && npx nodemon src/index.js --legacy-watch"
 
     depends_on:
       - redis
+
+volumes:
+  node_modules:
+  redis_data:

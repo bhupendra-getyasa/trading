@@ -172,5 +172,5 @@ function enrichStock(
 // }
 
 module.exports = {
-    enrichStock
+  enrichStock
 }

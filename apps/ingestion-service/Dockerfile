@@ -21,4 +21,4 @@ RUN npx playwright install --with-deps chromium
 # 4. Move into service
 WORKDIR /app/apps/ingestion-service
 
-CMD ["node", "--max-old-space-size=512", "src/index.js"]
+CMD ["node", "src/index.js"]
