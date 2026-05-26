@@ -12,6 +12,8 @@ app.use(cors({
   origin: '*'
 }));
 
+app.get('/hii', async (req, res) => res.send('hii, User'));
+
 const server = http.createServer(app);
 
 const port = process.env.PORT || 4000;
