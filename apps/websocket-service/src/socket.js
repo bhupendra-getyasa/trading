@@ -3,10 +3,19 @@ const { connection } = require('@trading/shared');
 
 let io;
 
+const allowedOrigins = [
+  'http://192.168.1.2:3000',
+  'https://jk-traders-5c752.web.app',
+  'https://jk-traders-5c752.firebaseapp.com',
+  'https://carola-stylish-tasia.ngrok-free.dev'
+];
+
+
 function init(server) {
   io = new Server(server, {
     cors: {
-      origin: '*',
+      origin: allowedOrigins,
+      credentials: true
     },
   });
 
@@ -48,4 +57,5 @@ module.exports = {
   init,
   broadcast,
   top10Performers,
+  allowedOrigins
 };
