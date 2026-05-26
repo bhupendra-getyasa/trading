@@ -22,15 +22,23 @@ app.use((req, res, next) => {
 
 app.use(cors({
   origin: function (origin, callback) {
+
     console.log("Origin:", origin);
 
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error("Not allowed by CORS"));
+    if (!origin) {
+      return callback(null, true);
     }
-  }
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error("Not allowed by CORS"));
+  },
+  credentials: true
 }));
+
+// app.options('*', cors());
 
 app.get('/hii', async (req, res) => res.send('hii, User'));
 
