@@ -8,9 +8,21 @@ require('./worker');
 
 const app = express();
 
+app.use((req, res, next) => {
+  console.log("Incoming request:", req.method, req.url, req.headers.origin);
+  next();
+});
+
 app.use(cors({
-  origin: allowedOrigins,
-  credentials: true
+  origin: function (origin, callback) {
+    console.log("Origin:", origin);
+
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  }
 }));
 
 app.get('/hii', async (req, res) => res.send('hii, User'));
