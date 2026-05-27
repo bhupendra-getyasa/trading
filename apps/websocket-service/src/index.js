@@ -1,6 +1,8 @@
 const express = require('express');
 const http = require('http');
 const cors = require('cors');
+const routes = require('./routes');
+// const cookieParser = require("cookie-parser");
 require('dotenv').config();
 
 const { init } = require('./socket');
@@ -15,10 +17,11 @@ const allowedOrigins = [
 
 const app = express();
 
-app.use((req, res, next) => {
-  console.log("Incoming request:", req.method, req.url, req.headers.origin);
-  next();
-});
+// parse json request body
+app.use(express.json());
+
+// parse urlencoded request body
+app.use(express.urlencoded({ extended: true }));
 
 app.use(cors({
   origin: function (origin, callback) {
@@ -38,7 +41,28 @@ app.use(cors({
   credentials: true
 }));
 
+// enable cors
+// app.use(cors());
 // app.options('*', cors());
+// app.use(cookieParser());
+
+app.use('/', routes);
+
+app.use((req, res, next) => {
+  console.log("Incoming request:", req.method, req.url, req.headers.origin);
+  next();
+});
+
+const errorHandler = (err, req, res, next) => {
+  console.log('err: ', err);
+
+  res.status(500).json({
+    success: false,
+    message: "Internal server error"
+  });
+};
+
+app.use(errorHandler);
 
 app.get('/hii', async (req, res) => res.send('hii, User'));
 

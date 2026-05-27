@@ -128,7 +128,7 @@ async function scrapeStocks() {
                     volume: getText('column-volume'),
                     avgVolume: getText('column-average_volume'),
                     marketCap: getText('column-market_cap_basic'),
-                    createdAt: new Date().toISOString(),
+                    // createdAt: new Date().toISOString(),
                 };
             });
         });

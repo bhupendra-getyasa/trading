@@ -1,7 +1,7 @@
 require('dotenv').config();
 
 const { Worker } = require('bullmq');
-const { connection } = require('@trading/shared');
+const { connection, sendSMS } = require('@trading/shared');
 
 const {
   broadcast,
@@ -14,10 +14,11 @@ const worker = new Worker(
 
     if (job.name === 'stock-update') {
       broadcast(job.data);
-    }
-
-    if (job.name === 'top-performers') {
+    } else if (job.name === 'top-performers') {
       top10Performers(job.data);
+    } else if (job.name === 'send-sms') {
+      // console.log('job: ', job.data);
+      // await sendSMS(job.data.mobile, job.data.dialcode, job.data.otp);
     }
   },
   {

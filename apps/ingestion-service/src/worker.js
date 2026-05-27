@@ -36,6 +36,7 @@ const worker = new Worker(
     
         // Generate bulk insert query
         const values = [];
+        const createdAt = new Date().toISOString();
         const placeholders = trades.map((trade, i) => {
           const idx = i * 10; // 10 columns
           values.push(
@@ -48,7 +49,7 @@ const worker = new Worker(
             trade.volume,
             trade.avgVolume,
             trade.marketCap,
-            trade.createdAt || new Date().toISOString()
+            createdAt
           );
     
           return `(

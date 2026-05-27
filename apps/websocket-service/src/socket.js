@@ -1,5 +1,8 @@
 const { Server } = require('socket.io');
-const { connection } = require('@trading/shared');
+const { pool, connection } = require('@trading/shared');
+
+const { loadFormulas } = require("@trading/shared/src/formula-engine/loadFormulas.js");
+const { processTopPerformers } = require("@trading/shared/src/rankings/processTopPerformers.js");
 
 let io;
 
@@ -26,11 +29,30 @@ function init(server) {
     const topPerformers = await connection.get('top_performers')
 
     if (stocks) {
-        socket.emit('stock-update', JSON.parse(stocks));
+      socket.emit('stock-update', JSON.parse(stocks));
     }
 
     if (topPerformers) {
-        socket.emit('top-performers', JSON.parse(topPerformers));
+      socket.emit('top-performers', JSON.parse(topPerformers));
+    } else {
+      const { rows: stocks } = await pool.query(`
+        SELECT *
+          FROM public.market_stock_snapshots
+          WHERE created_at = (
+            SELECT MAX(created_at)
+            FROM public.market_stock_snapshots
+          )
+        `)
+
+      const formulas = await loadFormulas(pool);
+            
+      const top10 =
+        await processTopPerformers(
+          stocks,
+          formulas
+        );
+        
+      socket.emit('top-performers', top10);
     }
 
     socket.on('disconnect', () => {
