@@ -23,10 +23,16 @@ async function initBrowser() {
             '--mute-audio',
             '--no-first-run',
             '--disable-default-apps',
-        ],
+            '--disable-blink-features=AutomationControlled',
+        ]
     });
 
-    const context = await browser.newContext();
+    const context = await browser.newContext({
+        viewport: {
+            width: 1920,
+            height: 1080,
+        },
+    });
 
     page = await context.newPage();
 
