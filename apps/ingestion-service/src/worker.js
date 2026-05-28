@@ -110,7 +110,7 @@ const worker = new Worker(
   },
   {
     connection,
-    concurrency: 5,
+    concurrency: 1,
   }
 );
 
