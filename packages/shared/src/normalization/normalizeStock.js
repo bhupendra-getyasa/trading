@@ -6,6 +6,8 @@ const { parseVolume } = require("./parseVolume.js");
 
 const { parseMarketCap } = require("./parseMarketCap.js");
 
+const { extractUnit } = require("./extractUnit.js");
+
 function normalizeStock(raw) {
 
   const volume =
@@ -46,19 +48,37 @@ function normalizeStock(raw) {
         raw.last_price
       ),
 
+    price_unit: 
+      extractUnit(
+        raw.last_price
+      ),
+
     percent_change:
       parsePercent(
         raw.change_percent
       ),
 
+    
+
     change_value:
       parsePrice(raw.change),
+
+    change_value_unit: 
+      extractUnit(
+        raw.change
+      ),
 
     // --------------------------------
     // Volume
     // --------------------------------
 
     volume,
+
+    volume_unit:
+      extractUnit(
+        raw.volume
+      ),
+
 
     avg_volume: avgVolume,
 

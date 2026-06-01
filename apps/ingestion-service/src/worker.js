@@ -65,7 +65,7 @@ const worker = new Worker(
       }).join(',');
 
       const query = `
-        INSERT INTO trades
+        INSERT INTO market_stock_snapshots
         (symbol, company_name, stock_url, last_price, change_percent,
           change, volume, avg_volume, market_cap, created_at)
         VALUES ${placeholders}

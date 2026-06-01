@@ -6,6 +6,7 @@ function parsePrice(value) {
   return parseFloat(
     value
       .replace(/,/g, "")
+      .replace(/−/g, "-")
       .replace(/[A-Z]+/g, "")
       .trim()
   );
