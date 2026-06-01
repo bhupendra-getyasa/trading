@@ -21,10 +21,15 @@ const notificationQueue = new Queue('notification-queue', {
     connection,
 });
 
+const fibQueue = new Queue('fib-queue', {
+    connection,
+});
+
 module.exports = {
     socketQueue,
     stockQueue,
     analyticsQueue,
     aiQueue,
     notificationQueue,
+    fibQueue
 };

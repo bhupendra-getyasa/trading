@@ -75,9 +75,41 @@ function top10Performers(data) {
   }
 }
 
+function broadcastFibSignals(signals) {
+  if (!io || !signals || signals.length === 0) return;
+
+  io.emit('fib-signals', signals);
+
+  // Cache STRONG_BUY entries for new clients that connect mid-session
+  const strongBuys = signals.filter(s => s.signalType === 'STRONG_BUY');
+  if (strongBuys.length > 0) {
+    connection.set(
+      'latest_strong_buys',
+      JSON.stringify(strongBuys),
+      'EX',
+      3600   // expire after 1 hour
+    ).catch(() => {});
+  }
+
+  console.log(
+    `[socket] Broadcast fib-signals | total: ${signals.length} | ` +
+    `STRONG_BUY: ${strongBuys.length}`
+  );
+}
+
+function broadcastFibSignal(signal) {
+  if (!io) return;
+  io.emit('fib-signal', signal);
+
+  if (signal.signal_type === 'STRONG_BUY') {
+    console.log(`[socket] 🟢 STRONG_BUY broadcast: ${signal.symbol}`);
+  }
+}
+
 module.exports = {
   init,
   broadcast,
   top10Performers,
+  broadcastFibSignals,
   allowedOrigins
 };
