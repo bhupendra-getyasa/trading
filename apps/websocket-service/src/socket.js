@@ -140,10 +140,10 @@ async function broadcastFibSignals() {
   //   ).catch(() => {});
   // }
 
-  console.log(
-    `[socket] Broadcast fib-signals | total: ${signals.length} | ` +
-    `STRONG_BUY: ${strongBuys.length}`
-  );
+  // console.log(
+  //   `[socket] Broadcast fib-signals | total: ${signals.length} | ` +
+  //   `STRONG_BUY: ${strongBuys.length}`
+  // );
 }
 
 function broadcastFibSignal(signal) {
