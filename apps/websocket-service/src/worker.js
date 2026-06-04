@@ -6,6 +6,7 @@ const { connection, sendSMS } = require('@trading/shared');
 const {
   broadcast,
   top10Performers,
+  broadcastFibSignals
 } = require('./socket');
 
 const worker = new Worker(
@@ -19,6 +20,8 @@ const worker = new Worker(
     } else if (job.name === 'send-sms') {
       // console.log('job: ', job.data);
       // await sendSMS(job.data.mobile, job.data.dialcode, job.data.otp);
+    } else if (job.name === 'fib-signal') {
+      broadcastFibSignals()
     }
   },
   {

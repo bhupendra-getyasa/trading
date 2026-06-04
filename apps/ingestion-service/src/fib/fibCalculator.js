@@ -29,24 +29,53 @@
 
 'use strict';
 
-const TOUCH_TOLERANCE_PCT = parseFloat(process.env.TOUCH_TOLERANCE_PCT || '0.5');
+const TOUCH_TOLERANCE_PCT = parseFloat(process.env.TOUCH_TOLERANCE_PCT || '0.3');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // loadUserFibLevels
 // Fetches the user-defined fib levels for a symbol from fibonacci_levels table.
 // Returns an array ordered by level_percent ASC.
 // ─────────────────────────────────────────────────────────────────────────────
+// async function loadUserFibLevels(pool, symbol) {
+//     const { rows } = await pool.query(
+//         `SELECT id, symbol, level_percent, level_price, trend_direction
+//          FROM   public.fibonacci_levels
+//          WHERE  symbol     = $1
+//            AND  is_active  = true
+//            AND  is_deleted = false
+//          ORDER  BY symbol, level_percent ASC`,
+//         [symbol]
+//     );
+//     return rows; // may be empty if user hasn't configured this symbol
+// }
+
+const fibLevelsCache = new Map();
+const FIB_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 async function loadUserFibLevels(pool, symbol) {
+    const cached = fibLevelsCache.get(symbol);
+    if (cached && (Date.now() - cached.loadedAt) < FIB_CACHE_TTL_MS) {
+        return cached.rows;
+    }
+
     const { rows } = await pool.query(
         `SELECT id, symbol, level_percent, level_price, trend_direction
          FROM   public.fibonacci_levels
          WHERE  symbol     = $1
            AND  is_active  = true
            AND  is_deleted = false
-         ORDER  BY level_percent ASC`,
+         ORDER  BY symbol, level_percent ASC`,
         [symbol]
     );
-    return rows; // may be empty if user hasn't configured this symbol
+
+    fibLevelsCache.set(symbol, { rows, loadedAt: Date.now() });
+    return rows;
+}
+
+// Export cache invalidation so admin can force refresh:
+function invalidateFibCache(symbol = null) {
+    if (symbol) fibLevelsCache.delete(symbol);
+    else fibLevelsCache.clear();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -66,8 +95,11 @@ function calculateLevelPrices(swingLow, swingHigh, trendDirection, fibRows) {
     if (range <= 0) return [];
 
     return fibRows.map(row => {
-        const pct   = parseFloat(row.level_percent);
-        const ratio = pct / 100;
+        // const pct   = parseFloat(row.level_percent);
+        // const ratio = pct / 100;
+
+        const ratio = parseFloat(row.level_percent); // already 0–1, e.g. 0.236
+        const pct   = ratio * 100; 
 
         let computedPrice;
 
@@ -101,22 +133,43 @@ function calculateLevelPrices(swingLow, swingHigh, trendDirection, fibRows) {
 // @param {number}   [tolerancePct]   — override the default tolerance
 // @returns {object[]}  matched levels, each with deviationPct added
 // ─────────────────────────────────────────────────────────────────────────────
+// function findTouchedLevels(currentPrice, levelsWithPrices, tolerancePct = TOUCH_TOLERANCE_PCT) {
+//     const band    = tolerancePct / 100;  // e.g. 0.003 for 0.3%
+//     const touched = [];
+
+//     for (const level of levelsWithPrices) {
+//         const deviation = Math.abs(currentPrice - level.computed_price) / level.computed_price;
+
+//         if (deviation <= band) {
+//             touched.push({
+//                 ...level,
+//                 deviationPct: parseFloat((deviation * 100).toFixed(4)),
+//             });
+//         }
+//     }
+
+//     return touched.sort((a, b) => a.deviationPct - b.deviationPct);
+// }
+
+// fibCalculator.js — replace findTouchedLevels:
+const MIN_ABSOLUTE_BAND = parseFloat(process.env.MIN_ABSOLUTE_BAND || '0.1'); // KWF
+
 function findTouchedLevels(currentPrice, levelsWithPrices, tolerancePct = TOUCH_TOLERANCE_PCT) {
-    const band    = tolerancePct / 100;
     const touched = [];
 
     for (const level of levelsWithPrices) {
-        const deviation = Math.abs(currentPrice - level.computed_price) / level.computed_price;
+        const deviation    = Math.abs(currentPrice - level.computed_price);
+        const pctBand      = level.computed_price * (tolerancePct / 100);
+        const effectiveBand = Math.max(pctBand, MIN_ABSOLUTE_BAND); // floor for cheap stocks
 
-        if (deviation <= band) {
+        if (deviation <= effectiveBand) {
             touched.push({
                 ...level,
-                deviationPct: parseFloat((deviation * 100).toFixed(4)),
+                deviationPct: parseFloat(((deviation / level.computed_price) * 100).toFixed(4)),
             });
         }
     }
 
-    // Sort by closest first
     return touched.sort((a, b) => a.deviationPct - b.deviationPct);
 }
 
@@ -137,20 +190,40 @@ const STRONG_BUY_FLOOR  = parseFloat(process.env.STRONG_BUY_FLOOR  || '55');
 const BUY_FLOOR         = parseFloat(process.env.BUY_FLOOR         || '35');
 const RESISTANCE_CEIL   = parseFloat(process.env.RESISTANCE_CEIL   || '25');
 
+// function classifySignalType(levelPct, trendDirection) {
+//     const pct = parseFloat(levelPct);
+
+//     if (trendDirection === 'BULLISH') {
+//         // In a bullish swing, high % = deep retracement = strong support
+//         if (pct >= STRONG_BUY_FLOOR) return { type: 'STRONG_BUY', strength: 5 };
+//         if (pct >= BUY_FLOOR)        return { type: 'BUY',         strength: 3 };
+//         if (pct <= RESISTANCE_CEIL)  return { type: 'RESISTANCE',  strength: 3 };
+//         return { type: 'TOUCH', strength: 2 };
+//     } else {
+//         // In a bearish swing, high % = price recovering = resistance
+//         if (pct >= STRONG_BUY_FLOOR) return { type: 'RESISTANCE',  strength: 3 };
+//         if (pct >= BUY_FLOOR)        return { type: 'TOUCH',        strength: 2 };
+//         if (pct <= RESISTANCE_CEIL)  return { type: 'WEAK',         strength: 4 };
+//         return { type: 'TOUCH', strength: 2 };
+//     }
+// }
+
 function classifySignalType(levelPct, trendDirection) {
     const pct = parseFloat(levelPct);
 
     if (trendDirection === 'BULLISH') {
-        // In a bullish swing, high % = deep retracement = strong support
-        if (pct >= STRONG_BUY_FLOOR) return { type: 'STRONG_BUY', strength: 5 };
-        if (pct >= BUY_FLOOR)        return { type: 'BUY',         strength: 3 };
-        if (pct <= RESISTANCE_CEIL)  return { type: 'RESISTANCE',  strength: 3 };
+        if (pct > 78.6)                   return { type: 'WEAK',        strength: 1 }; // trend failing
+        if (pct >= 61.8 && pct <= 78.6)  return { type: 'STRONG_BUY',  strength: 5 }; // golden zone
+        if (pct >= 38.2 && pct < 61.8)   return { type: 'BUY',         strength: 3 }; // standard zone
+        if (pct >= 23.6 && pct < 38.2)   return { type: 'TOUCH',       strength: 2 }; // shallow
+        if (pct < 23.6)                  return { type: 'RESISTANCE',  strength: 2 }; // near top
         return { type: 'TOUCH', strength: 2 };
     } else {
-        // In a bearish swing, high % = price recovering = resistance
-        if (pct >= STRONG_BUY_FLOOR) return { type: 'RESISTANCE',  strength: 3 };
-        if (pct >= BUY_FLOOR)        return { type: 'TOUCH',        strength: 2 };
-        if (pct <= RESISTANCE_CEIL)  return { type: 'WEAK',         strength: 4 };
+        // BEARISH swing — measuring recovery
+        if (pct > 78.6)                  return { type: 'RESISTANCE',  strength: 3 }; // near full recovery
+        if (pct >= 61.8 && pct <= 78.6) return { type: 'RESISTANCE',  strength: 4 }; // strong resistance
+        if (pct >= 38.2 && pct < 61.8)  return { type: 'TOUCH',       strength: 2 };
+        if (pct < 23.6)                 return { type: 'WEAK',        strength: 1 };
         return { type: 'TOUCH', strength: 2 };
     }
 }
@@ -177,4 +250,5 @@ module.exports = {
     classifySignalType,
     computeAllLevels,
     TOUCH_TOLERANCE_PCT,
+    invalidateFibCache
 };

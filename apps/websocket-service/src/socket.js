@@ -28,6 +28,17 @@ function init(server) {
     const stocks = await connection.get('latest_trades')
     const topPerformers = await connection.get('top_performers')
 
+    // const query = `
+    //   SELECT *
+    //   FROM public.market_stock_snapshots
+    //   WHERE created_at >= date_trunc('day', NOW()) + INTERVAL '8 hour'
+    //     AND created_at <  date_trunc('day', NOW()) + INTERVAL '9 hour'
+    //   ORDER BY created_at, symbol;`;
+
+    // const { rows: trades } = await pool.query(query);
+
+    // socket.emit('stocks', trades);
+
     if (stocks) {
       socket.emit('stock-update', JSON.parse(stocks));
     }
@@ -55,6 +66,8 @@ function init(server) {
       socket.emit('top-performers', top10);
     }
 
+    await broadcastFibSignals();
+
     socket.on('disconnect', () => {
       console.log('Client disconnected', socket.id);
     });
@@ -75,21 +88,57 @@ function top10Performers(data) {
   }
 }
 
-function broadcastFibSignals(signals) {
-  if (!io || !signals || signals.length === 0) return;
+async function broadcastFibSignals() {
+  if (!io) return;
+
+  const query = `
+    SELECT
+    fs.*,
+    sw.current_price,
+    sw.change_percent,
+    COALESCE(fl.levels, '[]'::json) AS fibonacci_levels
+    FROM fibonacci_signals fs
+    LEFT JOIN LATERAL (
+      SELECT *
+      FROM fibonacci_swings
+      WHERE symbol = fs.symbol
+        AND id = fs.swing_id
+      LIMIT 1
+    ) sw ON true
+    LEFT JOIN LATERAL (
+      SELECT json_agg(
+        json_build_object(
+          'id', id,
+          'level_percent', level_percent,
+          'level_price', level_price,
+          'trend_direction', trend_direction,
+          'signal_id', signal_id,
+          'color', color
+        )
+        ORDER BY level_percent
+      ) AS levels
+      FROM fibonacci_levels
+      WHERE symbol = fs.symbol
+        AND is_active = true
+        AND is_deleted = false
+    ) fl ON true
+    WHERE fs.created_at::date = CURRENT_DATE;
+  `
+
+  const { rows: signals } = await pool.query(query);
 
   io.emit('fib-signals', signals);
 
   // Cache STRONG_BUY entries for new clients that connect mid-session
-  const strongBuys = signals.filter(s => s.signalType === 'STRONG_BUY');
-  if (strongBuys.length > 0) {
-    connection.set(
-      'latest_strong_buys',
-      JSON.stringify(strongBuys),
-      'EX',
-      3600   // expire after 1 hour
-    ).catch(() => {});
-  }
+  // const strongBuys = signals.filter(s => s.signalType === 'STRONG_BUY');
+  // if (strongBuys.length > 0) {
+  //   connection.set(
+  //     'latest_strong_buys',
+  //     JSON.stringify(strongBuys),
+  //     'EX',
+  //     3600   // expire after 1 hour
+  //   ).catch(() => {});
+  // }
 
   console.log(
     `[socket] Broadcast fib-signals | total: ${signals.length} | ` +

@@ -13,6 +13,9 @@ const { scrapeStocks } = require('./scraper');
 const { publishStock } = require('./publisher');
 const { processBatch } = require('./fib/fibProcessor');    // ← NEW
 
+let count = 0;
+let stockts = [];
+
 
 const worker = new Worker(
   'stock-queue',
@@ -23,6 +26,25 @@ const worker = new Worker(
     // ─────────────────────────────────────────────────────────────────────
     if (job.name === 'scrape-job') {
       console.log(`[${new Date().toISOString()}] Scraping started`);
+      // const result = await pool.query(`
+      //   WITH scrape_times AS (
+      //     SELECT DISTINCT created_at
+      //     FROM public.market_stock_snapshots
+      //     WHERE created_at >= date_trunc('day', NOW()) + INTERVAL '7 hour 50 minute'
+      //       AND created_at <  date_trunc('day', NOW()) + INTERVAL '10 hour'
+      //     ORDER BY created_at
+      //     OFFSET $1 LIMIT 1
+      //   )
+      //   SELECT *
+      //   FROM public.market_stock_snapshots
+      //   WHERE created_at = (SELECT created_at FROM scrape_times)
+      //   ORDER BY symbol;
+      // `, [count])
+
+      // stocks = result.rows
+      // count++;
+      // console.log('stocks: ', stocks.length, count)
+
       const stocks = await scrapeStocks();
       await publishStock(stocks);
       console.log(`[${new Date().toISOString()}] Scraping finished — ${stocks.length} stocks`);
@@ -87,9 +109,9 @@ const worker = new Worker(
         // ── 4. NEW: Fibonacci swing detection & signal generation ───────
         // stocks[] are DB rows (snake_case) — fibProcessor handles both formats
         // Run in background — don't await so it doesn't delay the main job
-        // processBatch(pool, stocks).catch(err => {
-        //   console.error('[fib] processBatch error:', err.message);
-        // });
+        processBatch(pool, stocks).catch(err => {
+          console.error('[fib] processBatch error:', err.message);
+        });
 
       } catch (err) {
         console.error('Error inserting trades:', err);

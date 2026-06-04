@@ -32,15 +32,16 @@ const NOTIFY_TYPES = new Set(
 // Returns true if we already fired this symbol + fib_level_percent in the last
 // COOLDOWN_MINUTES minutes. Prevents duplicate alerts per tick.
 // ─────────────────────────────────────────────────────────────────────────────
-async function isOnCooldown(pool, symbol, fibLevelPercent) {
+async function isOnCooldown(pool, symbol, swingId, fibLevelPercent) {
     const { rows } = await pool.query(
         `SELECT 1
          FROM   public.fibonacci_signals
          WHERE  symbol            = $1
-           AND  fib_level_percent = $2
-           AND  created_at        >= NOW() - ($3 || ' minutes')::INTERVAL
+           AND  swing_id          = $2
+           AND  fib_level_percent = $3
+           AND  created_at        >= NOW() - ($4 || ' minutes')::INTERVAL
          LIMIT  1`,
-        [symbol, fibLevelPercent, COOLDOWN_MINUTES]
+        [symbol, swingId, fibLevelPercent, COOLDOWN_MINUTES]
     );
     return rows.length > 0;
 }
@@ -123,7 +124,8 @@ function buildWhatsAppMessage(signal) {
         `   Trend: ${signal.trend_direction}`,
         ``,
         `📍 *Fib Level Touched*`,
-        `   Level:     ${signal.fib_level_percent}%  →  ${fmt(signal.fib_level_price)}`,
+        // `   Level:     ${signal.fib_level_percent}%  →  ${fmt(signal.fib_level_price)}`,
+        `   Level:     ${(parseFloat(signal.fib_level_percent) * 100).toFixed(1)}%  →  ${fmt(signal.fib_level_price)}`,
         `   Price:     ${fmt(signal.trigger_price)}`,
         `   Deviation: ${signal.deviation_pct ?? 0}%`,
         ``,
@@ -207,17 +209,18 @@ async function sendWhatsApp(pool, signal) {
 
     const message = buildWhatsAppMessage(signal);
 
-    // for (const recipient of RECIPIENTS) {
-    //     try {
-    //         const ref = PROVIDER === 'meta'
-    //             ? await sendViaMeta(recipient, message)
-    //             : await sendViaTwilio(recipient, message);
+    for (const recipient of RECIPIENTS) {
+        console.log('recipient: ', recipient);
+        // try {
+        //     const ref = PROVIDER === 'meta'
+        //         ? await sendViaMeta(recipient, message)
+        //         : await sendViaTwilio(recipient, message);
 
-    //         console.log(`[notifier] ✅ ${signal.symbol} ${signal.signal_type} → ${recipient} | ref: ${ref}`);
-    //     } catch (err) {
-    //         console.error(`[notifier] ❌ Failed → ${recipient}: ${err.message}`);
-    //     }
-    // }
+        //     console.log(`[notifier] ✅ ${signal.symbol} ${signal.signal_type} → ${recipient} | ref: ${ref}`);
+        // } catch (err) {
+        //     console.error(`[notifier] ❌ Failed → ${recipient}: ${err.message}`);
+        // }
+    }
 
     // Mark signal as notified
     await pool.query(
@@ -241,11 +244,12 @@ async function sendWhatsApp(pool, signal) {
 // @param {object[]} touchedLevels  — from fibCalculator.findTouchedLevels()
 // ─────────────────────────────────────────────────────────────────────────────
 async function processSignals(pool, swing, stockRow, touchedLevels) {
+    console.log('stockRow: ', stockRow);
     const results = [];
 
     for (const level of touchedLevels) {
         // Cooldown check — skip if same symbol + level fired recently
-        const onCooldown = await isOnCooldown(pool, stockRow.symbol, level.pct);
+        const onCooldown = await isOnCooldown(pool, stockRow.symbol, swing.id, level.level_percent);
         if (onCooldown) {
             console.log(`[signal] Cooldown: ${stockRow.symbol} @ ${level.pct}% — skipping`);
             continue;
@@ -264,7 +268,7 @@ async function processSignals(pool, swing, stockRow, touchedLevels) {
             symbol:           stockRow.symbol,
             companyName:      stockRow.companyName || stockRow.company_name || '',
             fibLevelId:       level.id || null,
-            fibLevelPercent:  level.pct,
+            fibLevelPercent:  level.level_percent,
             fibLevelPrice:    level.computed_price,
             triggerPrice:     parseFloat(swing.current_price),
             deviationPct:     level.deviationPct,
@@ -276,11 +280,11 @@ async function processSignals(pool, swing, stockRow, touchedLevels) {
             approachDirection,
         });
 
-        console.log(
-            `[signal] ${signalType} | ${stockRow.symbol} | ` +
-            `${level.pct}% → ${level.computed_price} | ` +
-            `price: ${swing.current_price}`
-        );
+        // console.log(
+        //     `[signal] ${signalType} | ${stockRow.symbol} | ` +
+        //     `${level.pct}% → ${level.computed_price} | ` +
+        //     `price: ${swing.current_price}`
+        // );
 
         // Broadcast to frontend via socket queue
         await broadcastSignal(saved);
