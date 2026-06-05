@@ -25,6 +25,7 @@ async function processOneTick(pool, stock) {
     const symbol       = stock.symbol;
     const lastPriceRaw = stock.last_price ?? stock.lastPrice ?? '0';
     const companyName  = stock.company_name ?? stock.companyName ?? '';
+    const changePercent  = stock.change_percent ?? stock.changePercent ?? '0';
 
     const currentPrice = parsePrice(lastPriceRaw);
     if (!currentPrice || currentPrice <= 0) {
@@ -124,7 +125,7 @@ async function processOneTick(pool, stock) {
     const signals = await processSignals(
         pool,
         evalSwing,              // ← use the swing whose range was measured
-        { symbol, companyName },
+        { symbol, companyName, changePercent },
         confirmedLevels
     );
 

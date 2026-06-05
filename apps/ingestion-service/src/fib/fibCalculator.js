@@ -212,9 +212,9 @@ function classifySignalType(levelPct, trendDirection) {
     const pct = parseFloat(levelPct);
 
     if (trendDirection === 'BULLISH') {
-        if (pct > 78.6)                   return { type: 'WEAK',        strength: 1 }; // trend failing
-        if (pct >= 61.8 && pct <= 78.6)  return { type: 'STRONG_BUY',  strength: 5 }; // golden zone
-        if (pct >= 38.2 && pct < 61.8)   return { type: 'BUY',         strength: 3 }; // standard zone
+        if (pct > 78.6)                   return { type: 'STRONG_BUY',        strength: 5 }; // trend failing
+        if (pct >= 61.8 && pct <= 78.6)  return { type: 'BUY',  strength: 3 }; // golden zone
+        if (pct >= 38.2 && pct < 61.8)   return { type: 'WEAK',         strength: 1 }; // standard zone
         if (pct >= 23.6 && pct < 38.2)   return { type: 'TOUCH',       strength: 2 }; // shallow
         if (pct < 23.6)                  return { type: 'RESISTANCE',  strength: 2 }; // near top
         return { type: 'TOUCH', strength: 2 };

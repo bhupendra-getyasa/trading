@@ -7,6 +7,8 @@ const { processTopPerformers } = require("@trading/shared/src/rankings/processTo
 let io;
 
 const allowedOrigins = [
+  'http:localhost:3000',
+  'http:localhost:3001',
   'http://192.168.1.2:3000',
   'https://jk-traders-5c752.web.app',
   'https://jk-traders-5c752.firebaseapp.com',
@@ -96,8 +98,11 @@ async function broadcastFibSignals() {
     fs.*,
     sw.current_price,
     sw.change_percent,
+    fst.id AS signal_type_id,
     COALESCE(fl.levels, '[]'::json) AS fibonacci_levels
     FROM fibonacci_signals fs
+    LEFT JOIN fibonacci_signal_types fst
+      ON fst.signal_code = fs.signal_type
     LEFT JOIN LATERAL (
       SELECT *
       FROM fibonacci_swings
@@ -113,19 +118,27 @@ async function broadcastFibSignals() {
           'level_price', level_price,
           'trend_direction', trend_direction,
           'signal_id', signal_id,
-          'color', color
+          'color', color,
+          'is_active', is_active
         )
         ORDER BY level_percent
       ) AS levels
       FROM fibonacci_levels
       WHERE symbol = fs.symbol
-        AND is_active = true
         AND is_deleted = false
     ) fl ON true
     WHERE fs.created_at::date = CURRENT_DATE;
   `
 
   const { rows: signals } = await pool.query(query);
+
+  signals.sort((a, b) => {
+    if (a.signal_type_id !== b.signal_type_id) {
+      return a.signal_type_id - b.signal_type_id;
+    }
+
+    return b.deviation_pct - a.deviation_pct;
+  });
 
   io.emit('fib-signals', signals);
 

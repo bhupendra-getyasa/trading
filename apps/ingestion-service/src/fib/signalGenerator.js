@@ -53,6 +53,7 @@ async function saveSignal(pool, {
     swingId,
     symbol,
     companyName,
+    changePercent,
     fibLevelId,
     fibLevelPercent,
     fibLevelPrice,
@@ -69,16 +70,16 @@ async function saveSignal(pool, {
 
     const { rows } = await pool.query(
         `INSERT INTO public.fibonacci_signals (
-           swing_id, symbol, company_name,
+           swing_id, symbol, company_name, change_percent,
            fib_level_id, fib_level_percent, fib_level_price,
            trigger_price, deviation_pct,
            swing_low, swing_high, swing_range, trend_direction,
            signal_type, signal_strength, approach_direction
          )
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
          RETURNING *`,
         [
-            swingId,        symbol,          companyName,
+            swingId,        symbol,          companyName, changePercent,
             fibLevelId,     fibLevelPercent, fibLevelPrice,
             triggerPrice,   deviationPct,
             swingLow,       swingHigh,       swingRange,     trendDirection,
@@ -266,7 +267,8 @@ async function processSignals(pool, swing, stockRow, touchedLevels) {
         const saved = await saveSignal(pool, {
             swingId:          swing.id,
             symbol:           stockRow.symbol,
-            companyName:      stockRow.companyName || stockRow.company_name || '',
+            companyName:      stockRow.companyName,
+            changePercent:    stockRow.changePercent,
             fibLevelId:       level.id || null,
             fibLevelPercent:  level.level_percent,
             fibLevelPrice:    level.computed_price,

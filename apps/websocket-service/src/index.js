@@ -9,6 +9,8 @@ const { init } = require('./socket');
 require('./worker');
 
 const allowedOrigins = [
+  'http:localhost:3000',
+  'http:localhost:3001',
   'http://192.168.1.2:3000',
   'https://jk-traders-5c752.web.app',
   'https://jk-traders-5c752.firebaseapp.com',
