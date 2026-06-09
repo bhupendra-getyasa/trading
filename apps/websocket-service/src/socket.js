@@ -19,7 +19,7 @@ const allowedOrigins = [
 function init(server) {
   io = new Server(server, {
     cors: {
-      origin: allowedOrigins,
+      origin: '*',
       credentials: true
     },
   });

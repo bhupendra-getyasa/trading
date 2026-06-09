@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const { stockQueue } = require('@trading/shared');
+const { connection, stockQueue } = require('@trading/shared');
 require('./worker');
 
 const {
@@ -72,6 +72,22 @@ async function start() {
 
     }, 
     { timezone: 'Asia/Kuwait'}
+  );
+
+  cron.schedule(
+    "0 2 * * *", // 2:00 AM daily
+    async () => {
+      try {
+        console.log("Clearing Redis...");
+        await connection.flushall(); // clears all Redis databases
+        console.log("Redis cleared");
+      } catch (err) {
+        console.error("Redis cleanup failed:", err);
+      }
+    },
+    {
+      timezone: "Asia/Kuwait",
+    }
   );
 }
 
