@@ -8,19 +8,20 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Code
-      - uses: actions/checkout@v4
+        uses: actions/checkout@v4
 
       - name: Deploy via SSH
-      - uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
-          user: root
+          username: root
           key: ${{ secrets.SSH_KEY }}
           script: |
             cd /home/ubuntu/trading
             docker compose down
-            docker system prune -a --volumes
+            docker system prune -af --volumes
             git pull origin main
             docker compose up --build -d
