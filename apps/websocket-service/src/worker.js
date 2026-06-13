@@ -6,22 +6,58 @@ const { connection, sendSMS } = require('@trading/shared');
 const {
   broadcast,
   top10Performers,
-  broadcastFibSignals
+  broadcastFibSignals,
+  broadcastWatchList
 } = require('./socket');
+
+// const worker = new Worker(
+//   'socket-queue',
+//   async (job) => {
+
+//     if (job.name === 'stock-update') {
+//       broadcast(job.data);
+//     } else if (job.name === 'top-performers') {
+//       top10Performers(job.data);
+//     } else if (job.name === 'send-sms') {
+//       // console.log('job: ', job.data);
+//       // await sendSMS(job.data.mobile, job.data.dialcode, job.data.otp);
+//     } else if (job.name === 'fib-signals') {
+//       broadcastFibSignals()
+//     } else if (job.name === 'watchlist') {
+//       broadcastWatchList()
+//     }
+//   },
+//   {
+//     connection,
+//     concurrency: 1,
+//   }
+// );
 
 const worker = new Worker(
   'socket-queue',
   async (job) => {
+    switch (job.name) {
+      case 'stock-update':
+        return broadcast(job.data);
 
-    if (job.name === 'stock-update') {
-      broadcast(job.data);
-    } else if (job.name === 'top-performers') {
-      top10Performers(job.data);
-    } else if (job.name === 'send-sms') {
-      // console.log('job: ', job.data);
-      // await sendSMS(job.data.mobile, job.data.dialcode, job.data.otp);
-    } else if (job.name === 'fib-signal') {
-      broadcastFibSignals()
+      case 'top-performers':
+        return top10Performers(job.data);
+
+      // case 'send-sms':
+      //   return sendSMS(
+      //     job.data.mobile,
+      //     job.data.dialcode,
+      //     job.data.otp
+      //   );
+
+      case 'fib-signals':
+        return broadcastFibSignals();
+
+      case 'watchlist':
+        return broadcastWatchList();
+
+      default:
+        throw new Error(`Unknown job type: ${job.name}`);
     }
   },
   {

@@ -245,7 +245,6 @@ async function sendWhatsApp(pool, signal) {
 // @param {object[]} touchedLevels  — from fibCalculator.findTouchedLevels()
 // ─────────────────────────────────────────────────────────────────────────────
 async function processSignals(pool, swing, stockRow, touchedLevels) {
-    console.log('stockRow: ', stockRow);
     const results = [];
 
     for (const level of touchedLevels) {
@@ -256,8 +255,11 @@ async function processSignals(pool, swing, stockRow, touchedLevels) {
             continue;
         }
 
-        const { type: signalType, strength: signalStrength } =
-            require('./fibCalculator').classifySignalType(level.pct, swing.trend_direction);
+        // const { type: signalType, strength: signalStrength } =
+        //     require('./fibCalculator').classifySignalType(level.pct, swing.trend_direction);
+
+        const signalType = level.type;
+        const signalStrength = level.strength;
 
         // Determine approach direction from trend
         const approachDirection =

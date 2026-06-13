@@ -59,12 +59,14 @@ async function loadUserFibLevels(pool, symbol) {
     }
 
     const { rows } = await pool.query(
-        `SELECT id, symbol, level_percent, level_price, trend_direction
-         FROM   public.fibonacci_levels
-         WHERE  symbol     = $1
-           AND  is_active  = true
-           AND  is_deleted = false
-         ORDER  BY symbol, level_percent ASC`,
+        `SELECT fl.id, fl.symbol, fl.level_percent, fl.level_price, 
+         fl.trend_direction, fst.display_name AS type, fst.strength 
+         FROM   public.fibonacci_levels fl
+         LEFT JOIN fibonacci_signal_types fst ON fst.id = fl.signal_id
+         WHERE  fl.symbol     = $1
+           AND  fl.is_active  = true
+           AND  fl.is_deleted = false
+         ORDER  BY fl.symbol, fl.level_percent ASC`,
         [symbol]
     );
 

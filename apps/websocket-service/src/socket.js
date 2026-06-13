@@ -29,6 +29,8 @@ function init(server) {
 
     const stocks = await connection.get('latest_trades')
     const topPerformers = await connection.get('top_performers')
+    const watchlist = await connection.get('watch_list');
+    const fibSignals = await connection.get('fib_signals');
 
     // const query = `
     //   SELECT *
@@ -41,9 +43,9 @@ function init(server) {
 
     // socket.emit('stocks', trades);
 
-    if (stocks) {
-      socket.emit('stock-update', JSON.parse(stocks));
-    }
+    // if (stocks) {
+    //   socket.emit('stock-update', JSON.parse(stocks));
+    // }
 
     if (topPerformers) {
       socket.emit('top-performers', JSON.parse(topPerformers));
@@ -68,7 +70,17 @@ function init(server) {
       socket.emit('top-performers', top10);
     }
 
-    await broadcastFibSignals();
+    if (watchlist) {
+      socket.emit('watchlist', JSON.parse(watchlist));
+    } else {
+      await broadcastWatchList();
+    }
+
+    if (fibSignals) {
+      socket.emit('fib-signals', JSON.parse(fibSignals));
+    } else {
+      await broadcastFibSignals();
+    }
 
     socket.on('disconnect', () => {
       console.log('Client disconnected', socket.id);
@@ -140,6 +152,7 @@ async function broadcastFibSignals() {
     return b.deviation_pct - a.deviation_pct;
   });
 
+  await connection.set('fib_signals', JSON.stringify(signals));
   io.emit('fib-signals', signals);
 
   // Cache STRONG_BUY entries for new clients that connect mid-session
@@ -168,10 +181,170 @@ function broadcastFibSignal(signal) {
   }
 }
 
+function getSignal({
+  entryPrice,
+  targetPercent,
+  currentPrice,
+  previousPrice,
+  status,
+  dropCount,
+  exitAfterDrops = 3
+}) {
+
+  const targetPrice = entryPrice + (entryPrice * targetPercent) / 100;
+
+  // Target not reached yet
+  if (status === "WATCH") {
+
+    if (currentPrice >= targetPrice) {
+      return {
+        signal: "SELL",
+        dropCount: 0
+      };
+    }
+
+    return {
+      signal: "WATCH",
+      dropCount: 0
+    };
+  }
+
+  // After target hit
+  if (status === "SELL") {
+
+    let updatedDropCount = dropCount;
+
+    if (currentPrice < previousPrice) {
+      updatedDropCount += 1;
+    } else {
+      updatedDropCount = 0;
+    }
+
+    if (updatedDropCount >= exitAfterDrops) {
+      return {
+        signal: "EXIT",
+        dropCount: updatedDropCount
+      };
+    }
+
+    return {
+      signal: "SELL",
+      dropCount: updatedDropCount
+    };
+  }
+
+  return {
+    signal: status,
+    dropCount
+  };
+}
+
+async function broadcastWatchList() {
+  if (!io) return;
+
+  try {
+    const watchlist = await pool.query(`
+      SELECT wl.*,
+      mss.company_name,
+      mss.last_price AS current_price,
+      mss.volume AS current_volume,
+      COALESCE(wlt.targets, '[]'::json) AS targets
+      FROM watchlists wl
+      LEFT JOIN LATERAL (
+        SELECT * 
+        FROM market_stock_snapshots
+        WHERE symbol = wl.symbol
+        ORDER BY created_at DESC
+        LIMIT 1
+      ) mss ON true
+      LEFT JOIN LATERAL (
+        SELECT json_agg(
+          json_build_object(
+            'id', id,
+            'watchlist_id', watchlist_id,
+            'target_percent', target_percent,
+            'drop_count', drop_count,
+            'is_active', is_active
+          )
+          ORDER BY target_percent
+        ) AS targets
+        FROM watchlist_targets wlt
+        WHERE wl.id = wlt.watchlist_id
+          AND wlt.is_deleted = false
+      ) wlt ON true
+      WHERE wl.is_active = true 
+      AND wl.is_deleted = false
+    `);
+
+    const finalResult = [];
+    for (const stock of watchlist.rows) {
+
+      const snapshots = await pool.query(
+        `SELECT
+          last_price AS price
+        FROM market_stock_snapshots
+        WHERE symbol = $1
+        ORDER BY created_at DESC
+        LIMIT 2
+        `,
+        [stock.symbol]
+      );
+
+      if (snapshots.rows.length < 2) {
+        continue;
+      }
+
+      const currentPrice =
+        parseFloat(snapshots.rows[0].price);
+
+      const previousPrice =
+        parseFloat(snapshots.rows[1].price);
+
+      const targetPercent = Array.isArray(stock.targets) && stock.targets.length > 0 ? 
+        Math.min(...(stock.targets || []).map(t => parseFloat(t.target_percent))) : 0
+
+      const result = getSignal({
+        entryPrice: parseFloat(stock.buy_price),
+        targetPercent: targetPercent,
+        currentPrice,
+        previousPrice,
+        status: stock.status,
+        dropCount: stock.drop_count,
+        exitAfterDrops: 3
+      });
+
+      finalResult.push({
+        ...stock,
+        dropCount: result.dropCount,
+        signal: result.signal
+      })
+
+      await pool.query(`
+        UPDATE watchlists
+        SET drop_count = $2,
+        status = $3
+        WHERE id = $1
+      `, [stock.id, result.dropCount, result.signal]
+      );
+
+      console.log(
+        `${stock.symbol} => ${result.signal}`
+      );
+    }
+
+    await connection.set('watch_list', JSON.stringify(finalResult));
+    io.emit('watchlist', finalResult);
+
+  } catch (err) {
+    console.error(err);
+  }
+}
+
 module.exports = {
   init,
   broadcast,
   top10Performers,
   broadcastFibSignals,
+  broadcastWatchList,
   allowedOrigins
 };

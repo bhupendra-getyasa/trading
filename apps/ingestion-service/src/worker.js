@@ -98,13 +98,24 @@ const worker = new Worker(
       try {
         const { rows: stocks } = await pool.query(query, values);
         console.log(`Inserted ${trades.length} trades into DB`);
+        await socketQueue.add('watchlist', {}, {
+          removeOnComplete: true,
+          removeOnFail: true
+        });
+        await socketQueue.add('fib-signals', {}, {
+          removeOnComplete: true,
+          removeOnFail: true
+        });
 
         // ── 3. Top performers (existing logic — unchanged) ─────────────
         const formulas = await loadFormulas(pool);
         const top10 = await processTopPerformers(stocks, formulas);
 
         await connection.set('top_performers', JSON.stringify(top10));
-        await socketQueue.add('top-performers', top10);
+        await socketQueue.add('top-performers', top10, {
+          removeOnComplete: true,
+          removeOnFail: true
+        });
 
         // ── 4. NEW: Fibonacci swing detection & signal generation ───────
         // stocks[] are DB rows (snake_case) — fibProcessor handles both formats

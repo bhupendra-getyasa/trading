@@ -15,7 +15,10 @@ router.post("/send-otp", async (req, res) => {
         300
     );
 
-    await socketQueue.add('stock-update', { phone, dialcode, otp });
+    await socketQueue.add('stock-update', { phone, dialcode, otp }, {
+        removeOnComplete: true,
+        removeOnFail: true
+    });
 
     return res.json({
         success: true,
