@@ -154,22 +154,6 @@ async function broadcastFibSignals() {
 
   await connection.set('fib_signals', JSON.stringify(signals));
   io.emit('fib-signals', signals);
-
-  // Cache STRONG_BUY entries for new clients that connect mid-session
-  // const strongBuys = signals.filter(s => s.signalType === 'STRONG_BUY');
-  // if (strongBuys.length > 0) {
-  //   connection.set(
-  //     'latest_strong_buys',
-  //     JSON.stringify(strongBuys),
-  //     'EX',
-  //     3600   // expire after 1 hour
-  //   ).catch(() => {});
-  // }
-
-  // console.log(
-  //   `[socket] Broadcast fib-signals | total: ${signals.length} | ` +
-  //   `STRONG_BUY: ${strongBuys.length}`
-  // );
 }
 
 function broadcastFibSignal(signal) {
@@ -184,14 +168,26 @@ function broadcastFibSignal(signal) {
 function getSignal({
   entryPrice,
   targetPercent,
+  exitTarget,
   currentPrice,
   previousPrice,
+  quantity,
   status,
   dropCount,
   exitAfterDrops = 3
 }) {
 
-  const targetPrice = entryPrice + (entryPrice * targetPercent) / 100;
+  const exitPrice = entryPrice - exitTarget;
+
+  if (exitPrice >= currentPrice) {
+    return {
+      signal: "EXIT",
+      dropCount: 0
+    };
+  }
+
+  // const targetPrice = entryPrice + (entryPrice * targetPercent) / 100;
+  const targetPrice = entryPrice + targetPercent;
 
   // Target not reached yet
   if (status === "WATCH") {
@@ -263,8 +259,8 @@ async function broadcastWatchList() {
             'id', id,
             'watchlist_id', watchlist_id,
             'target_percent', target_percent,
-            'drop_count', drop_count,
-            'is_active', is_active
+            'is_active', is_active,
+            'is_sell', is_sell
           )
           ORDER BY target_percent
         ) AS targets
@@ -294,42 +290,53 @@ async function broadcastWatchList() {
         continue;
       }
 
-      const currentPrice =
-        parseFloat(snapshots.rows[0].price);
+      if (!stock.sell_price && !stock.sell_volume) {
+        const currentPrice =
+          parseFloat(snapshots.rows[0].price) * stock.quantity;
+  
+        const previousPrice =
+          parseFloat(snapshots.rows[1].price) * stock.quantity;
+  
+        const targetPercent = Array.isArray(stock.targets) && stock.targets.length > 0 ? 
+          Math.min(...(stock.targets || []).filter(t => t.is_sell).map(t => parseFloat(t.target_percent))) : 0
 
-      const previousPrice =
-        parseFloat(snapshots.rows[1].price);
+        const exitTarget = Array.isArray(stock.targets) && stock.targets.length > 0 ? 
+          Math.min(...(stock.targets || []).filter(t => !t.is_sell).map(t => parseFloat(t.target_percent))) : 10;
+  
+        const result = getSignal({
+          entryPrice: parseFloat(stock.buy_price) * stock.quantity,
+          targetPercent,
+          exitTarget,
+          currentPrice,
+          previousPrice,
+          quantity: stock.quantity,
+          status: stock.status,
+          dropCount: stock.drop_count,
+          exitAfterDrops: 3
+        });
+  
+        finalResult.push({
+          ...stock,
+          // exit_targets: stock.targets.filter((s) => !s.is_sell),
+          // targets: stock.targets.filter((s) => s.is_sell),
+          drop_count: result.dropCount,
+          signal: result.signal
+        })
 
-      const targetPercent = Array.isArray(stock.targets) && stock.targets.length > 0 ? 
-        Math.min(...(stock.targets || []).map(t => parseFloat(t.target_percent))) : 0
-
-      const result = getSignal({
-        entryPrice: parseFloat(stock.buy_price),
-        targetPercent: targetPercent,
-        currentPrice,
-        previousPrice,
-        status: stock.status,
-        dropCount: stock.drop_count,
-        exitAfterDrops: 3
-      });
-
-      finalResult.push({
-        ...stock,
-        dropCount: result.dropCount,
-        signal: result.signal
-      })
-
-      await pool.query(`
-        UPDATE watchlists
-        SET drop_count = $2,
-        status = $3
-        WHERE id = $1
-      `, [stock.id, result.dropCount, result.signal]
-      );
-
-      console.log(
-        `${stock.symbol} => ${result.signal}`
-      );
+        await pool.query(`
+          UPDATE watchlists
+          SET drop_count = $2,
+          status = $3
+          WHERE id = $1
+        `, [stock.id, result.dropCount, result.signal]
+        );
+  
+        console.log(
+          `${stock.symbol} => ${result.signal}`
+        );
+      } else {
+        finalResult.push(stock);
+      }
     }
 
     await connection.set('watch_list', JSON.stringify(finalResult));

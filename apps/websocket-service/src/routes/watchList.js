@@ -64,8 +64,8 @@ router.post("/add-stock", async (req, res) => {
 
     const targetResult = await client.query(
     `INSERT INTO watchlist_targets
-      (watchlist_id, target_percent)
-      VALUES ($1, $2), ($1, $3), ($1, $4)
+      (watchlist_id, target_percent, is_sell)
+      VALUES ($1, $2, true), ($1, $3, true), ($1, $4, true),  ($1, $3, false)
       RETURNING *
     `, [watchListId, 3, 5, 10])
 
@@ -127,12 +127,12 @@ router.post("/sell-stock", async (req, res) => {
     }
 
     const stockResult = await client.query(`
-        SELECT *
+      SELECT *
+        FROM public.market_stock_snapshots
+        WHERE symbol = $1 AND created_at = (
+          SELECT MAX(created_at)
           FROM public.market_stock_snapshots
-          WHERE symbol = $1 AND created_at = (
-            SELECT MAX(created_at)
-            FROM public.market_stock_snapshots
-          )
+        )
     `, [symbol])
 
     if (stockResult.rows.length === 0) {
@@ -215,7 +215,7 @@ router.post("/update-stock-target", async (req, res) => {
 
     const finalResult = [];
     for (const target of targets) {
-      if (!target.id || target.targetPercent == null) {
+      if (!target.id || !target.targetPercent ) {
         continue;
       }
 
@@ -309,6 +309,7 @@ router.post("/update-stock-targets-status", async (req, res) => {
       SET is_active = true,
       updated_at = NOW()
       WHERE watchlist_id = $1
+      AND is_sell = true
       RETURNING *
     `, [watchListId])
 
