@@ -7,7 +7,7 @@ router.post("/add-stock", async (req, res) => {
   const client = await pool.connect();
 
   try {
-    const { userId = 1, symbol } = req.body;
+    const { userId = 1, symbol, shares } = req.body;
 
     // Validation
     if (!userId || !symbol) {
@@ -55,10 +55,10 @@ router.post("/add-stock", async (req, res) => {
     // Insert into watchlist
     const watchResult = await client.query(
     `INSERT INTO watchlists
-      (user_id, symbol, buy_price, buy_volume)
-      VALUES ($1, $2, $3, $4)
+      (user_id, symbol, buy_price, buy_volume, quantity)
+      VALUES ($1, $2, $3, $4, $5)
       RETURNING *
-    `, [userId, symbol, price, volume]);
+    `, [userId, symbol, price, volume, shares]);
 
     const watchListId = watchResult.rows[0].id;
 
