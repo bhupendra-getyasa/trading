@@ -205,6 +205,29 @@ function getSignal({
     };
   }
 
+  // After exit
+  if (status === "EXIT") {
+
+    let updatedDropCount = dropCount;
+
+    if (currentPrice < previousPrice) {
+      updatedDropCount += 1;
+     
+    } else if (currentPrice > previousPrice) {
+      updatedDropCount = 0;
+      return {
+        signal: "WATCH",
+        dropCount: updatedDropCount
+      };
+
+    }
+
+    return {
+      signal: "EXIT",
+      dropCount: updatedDropCount
+    };
+  }
+
   // After target hit
   if (status === "SELL") {
 
@@ -292,19 +315,19 @@ async function broadcastWatchList() {
 
       if (!stock.sell_price && !stock.sell_volume) {
         const currentPrice =
-          parseFloat(snapshots.rows[0].price) * stock.quantity;
+          (parseFloat(snapshots.rows[0].price) / 1000) * stock.quantity;
   
         const previousPrice =
-          parseFloat(snapshots.rows[1].price) * stock.quantity;
+          (parseFloat(snapshots.rows[1].price) / 1000) * stock.quantity;
   
         const targetPercent = Array.isArray(stock.targets) && stock.targets.length > 0 ? 
           Math.min(...(stock.targets || []).filter(t => t.is_sell).map(t => parseFloat(t.target_percent))) : 0
 
         const exitTarget = Array.isArray(stock.targets) && stock.targets.length > 0 ? 
-          Math.min(...(stock.targets || []).filter(t => !t.is_sell).map(t => parseFloat(t.target_percent))) : 10;
+          Math.min(...(stock.targets || []).filter(t => !t.is_sell).map(t => parseFloat(t.target_percent))) : 5;
   
         const result = getSignal({
-          entryPrice: parseFloat(stock.buy_price) * stock.quantity,
+          entryPrice: (parseFloat(stock.buy_price) / 1000) * stock.quantity,
           targetPercent,
           exitTarget,
           currentPrice,

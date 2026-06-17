@@ -150,14 +150,14 @@ router.post("/sell-stock", async (req, res) => {
     `UPDATE watchlists
       SET sell_price = $3,
       sell_volume = $4,
-      is_active = false,
+      status = $5,
       updated_at = NOW()
       WHERE user_id = $1
         AND symbol = $2
         AND is_active = true
         AND is_deleted = false
       RETURNING *
-    `, [userId, symbol, price, volume]);
+    `, [userId, symbol, price, volume, 'SOLD']);
 
     if (watchResult.rows.length === 0) {
       return res.status(404).json({
