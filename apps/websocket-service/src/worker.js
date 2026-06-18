@@ -7,7 +7,8 @@ const {
   broadcast,
   top10Performers,
   broadcastFibSignals,
-  broadcastWatchList
+  broadcastWatchList,
+  broadcastWatchListToUser
 } = require('./socket');
 
 // const worker = new Worker(
@@ -55,6 +56,12 @@ const worker = new Worker(
 
       case 'watchlist':
         return broadcastWatchList();
+
+      case 'watchlist-updated':
+        return broadcastWatchListToUser(
+          job.data.userId,
+          job.data.date
+        );
 
       default:
         throw new Error(`Unknown job type: ${job.name}`);

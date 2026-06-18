@@ -7,7 +7,7 @@ router.post("/add-stock", async (req, res) => {
   const client = await pool.connect();
 
   try {
-    const { userId = 1, symbol, shares } = req.body;
+    const { userId = 1, symbol, shares, date } = req.body;
 
     // Validation
     if (!userId || !symbol) {
@@ -70,7 +70,7 @@ router.post("/add-stock", async (req, res) => {
     `, [watchListId, 3, 5, 10])
 
     await client.query("COMMIT");
-    await socketQueue.add('watchlist', {}, {
+    await socketQueue.add('watchlist-updated', { userId, date }, {
       removeOnComplete: true,
       removeOnFail: true
     });
@@ -99,7 +99,7 @@ router.post("/sell-stock", async (req, res) => {
   const client = await pool.connect();
 
   try {
-    const { userId = 1, symbol } = req.body;
+    const { userId = 1, symbol, date } = req.body;
 
     // Validation
     if (!userId || !symbol) {
@@ -166,18 +166,18 @@ router.post("/sell-stock", async (req, res) => {
       });
     }
 
-    const watchListId = watchResult.rows[0].id;
+    // const watchListId = watchResult.rows[0].id;
 
-    const targetResult = await client.query(
-    `UPDATE watchlist_targets
-      SET is_active = false,
-      updated_at = NOW()
-      WHERE watchlist_id = $1
-      RETURNING *
-    `, [watchListId]);
+    // const targetResult = await client.query(
+    // `UPDATE watchlist_targets
+    //   SET is_active = false,
+    //   updated_at = NOW()
+    //   WHERE watchlist_id = $1
+    //   RETURNING *
+    // `, [watchListId]);
 
     await client.query("COMMIT");
-    await socketQueue.add('watchlist', {}, {
+    await socketQueue.add('watchlist-updated', { userId, date }, {
       removeOnComplete: true,
       removeOnFail: true
     });
@@ -204,7 +204,7 @@ router.post("/sell-stock", async (req, res) => {
 // update stock target percent
 router.post("/update-stock-target", async (req, res) => {
   try {
-    const { targets } = req.body;
+    const { userId = 1, targets, date } = req.body;
 
     if (!Array.isArray(targets)) {
       return res.status(400).json({
@@ -230,7 +230,7 @@ router.post("/update-stock-target", async (req, res) => {
       finalResult.push(result.rows[0]);
     }
 
-    await socketQueue.add('watchlist', {}, {
+    await socketQueue.add('watchlist-updated', { userId, date }, {
       removeOnComplete: true,
       removeOnFail: true
     });
@@ -254,7 +254,7 @@ router.post("/update-stock-target", async (req, res) => {
 // active deactive stock target by targetId
 router.post("/update-stock-target-status", async (req, res) => {
   try {
-    const { targetId } = req.body;
+    const { userId = 1, targetId, date } = req.body;
 
     if (!targetId) {
       return res.status(400).json({
@@ -271,7 +271,7 @@ router.post("/update-stock-target-status", async (req, res) => {
       RETURNING *
     `, [targetId])
 
-    await socketQueue.add('watchlist', {}, {
+    await socketQueue.add('watchlist-updated', { userId, date }, {
       removeOnComplete: true,
       removeOnFail: true
     });
@@ -295,7 +295,7 @@ router.post("/update-stock-target-status", async (req, res) => {
 // active all stocks target by watchListId
 router.post("/update-stock-targets-status", async (req, res) => {
   try {
-    const { watchListId } = req.body;
+    const { userId = 1, watchListId, date } = req.body;
 
     if (!watchListId) {
       return res.status(400).json({
@@ -313,7 +313,7 @@ router.post("/update-stock-targets-status", async (req, res) => {
       RETURNING *
     `, [watchListId])
 
-    await socketQueue.add('watchlist', {}, {
+    await socketQueue.add('watchlist-updated', { userId, date }, {
       removeOnComplete: true,
       removeOnFail: true
     });
@@ -339,7 +339,7 @@ router.post("/delete-stock", async (req, res) => {
   const client = await pool.connect();
 
   try {
-    const { userId = 1, symbol } = req.body;
+    const { userId = 1, symbol, date } = req.body;
 
     // Validation
     if (!userId || !symbol) {
@@ -396,7 +396,7 @@ router.post("/delete-stock", async (req, res) => {
     `, [watchListId]);
 
     await client.query("COMMIT");
-    await socketQueue.add('watchlist', {}, {
+    await socketQueue.add('watchlist-updated', { userId, date }, {
       removeOnComplete: true,
       removeOnFail: true
     });

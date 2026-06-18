@@ -32,6 +32,22 @@ function init(server) {
     const watchlist = await connection.get('watch_list');
     const fibSignals = await connection.get('fib_signals');
 
+    socket.on('watchlist:subscribe', async ({ userId, date }) => {
+      socket.data.userId = userId;
+      socket.data.date = date;
+
+      await connection.set(
+        `watchlist_subscription:${socket.id}`,
+        JSON.stringify({
+          userId,
+          date
+        })
+      );
+
+      const data = await getWatchList(userId, date);
+      socket.emit('watchlist', data);
+    });
+
     // const query = `
     //   SELECT *
     //   FROM public.market_stock_snapshots
@@ -70,20 +86,15 @@ function init(server) {
       socket.emit('top-performers', top10);
     }
 
-    if (watchlist) {
-      socket.emit('watchlist', JSON.parse(watchlist));
-    } else {
-      await broadcastWatchList();
-    }
-
     if (fibSignals) {
       socket.emit('fib-signals', JSON.parse(fibSignals));
     } else {
       await broadcastFibSignals();
     }
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', async () => {
       console.log('Client disconnected', socket.id);
+      await connection.del(`watchlist_subscription:${socket.id}`);
     });
   });
 
@@ -258,8 +269,7 @@ function getSignal({
   };
 }
 
-async function broadcastWatchList() {
-  if (!io) return;
+async function getWatchList(userId = 1, date = new Date().toISOString().split('T')[0]) {
 
   try {
     const watchlist = await pool.query(`
@@ -291,9 +301,11 @@ async function broadcastWatchList() {
         WHERE wl.id = wlt.watchlist_id
           AND wlt.is_deleted = false
       ) wlt ON true
-      WHERE wl.is_active = true 
-      AND wl.is_deleted = false
-    `);
+      WHERE wl.user_id = $1
+        AND wl.created_at::date = $2
+        AND wl.is_active = true 
+        AND wl.is_deleted = false
+    `, [userId, date]);
 
     const finalResult = [];
     for (const stock of watchlist.rows) {
@@ -340,8 +352,6 @@ async function broadcastWatchList() {
   
         finalResult.push({
           ...stock,
-          // exit_targets: stock.targets.filter((s) => !s.is_sell),
-          // targets: stock.targets.filter((s) => s.is_sell),
           drop_count: result.dropCount,
           signal: result.signal
         })
@@ -362,12 +372,37 @@ async function broadcastWatchList() {
       }
     }
 
-    await connection.set('watch_list', JSON.stringify(finalResult));
-    io.emit('watchlist', finalResult);
-
+    return finalResult;
   } catch (err) {
     console.error(err);
   }
+}
+
+async function broadcastWatchList() {
+  if (!io) return;
+
+  const sockets = io.sockets.sockets.values();
+
+  for (const socket of sockets) {
+
+    const sub = await connection.get(`watchlist_subscription:${socket.id}`);
+
+    if (!sub) continue;
+
+    const { userId, date } = JSON.parse(sub);
+
+    const data = await getWatchList(userId, date);
+
+    socket.emit('watchlist', data);
+  }
+}
+
+async function broadcastWatchListToUser(userId, date) {
+  console.log('Hello from user: ', userId, date)
+  const data = await getWatchList(userId, date);
+
+  io.to(`user:${userId}`)
+    .emit('watchlist', data);
 }
 
 module.exports = {
@@ -376,5 +411,6 @@ module.exports = {
   top10Performers,
   broadcastFibSignals,
   broadcastWatchList,
+  broadcastWatchListToUser,
   allowedOrigins
 };
