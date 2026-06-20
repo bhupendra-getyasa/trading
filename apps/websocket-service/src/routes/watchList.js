@@ -201,6 +201,48 @@ router.post("/sell-stock", async (req, res) => {
   }
 });
 
+// update stock
+router.post("/update-stock", async (req, res) => {
+  try {
+    const { userId = 1, watchListId, quantity, date } = req.body;
+
+    if (!watchListId || !quantity) {
+      return res.status(400).json({
+        success: false,
+        message: "Watch list id and quantity is required"
+      });
+    }
+
+    const result = await pool.query(`
+      UPDATE watchlists
+      SET quantity = $3,
+      updated_at = NOW()
+      WHERE id = $1
+      AND user_id = $2
+      RETURNING *
+    `, [watchListId, userId, quantity])
+      
+    await socketQueue.add('watchlist-updated', { userId, date }, {
+      removeOnComplete: true,
+      removeOnFail: true
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: "Updated watch target successfully",
+      data: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error("Update Stock Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error"
+    });
+  }
+});
+
 // update stock target percent
 router.post("/update-stock-target", async (req, res) => {
   try {

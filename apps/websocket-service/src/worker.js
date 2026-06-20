@@ -6,6 +6,7 @@ const { connection, sendSMS } = require('@trading/shared');
 const {
   broadcast,
   top10Performers,
+  broadcastFibSignal,
   broadcastFibSignals,
   broadcastWatchList,
   broadcastWatchListToUser
@@ -50,6 +51,9 @@ const worker = new Worker(
       //     job.data.dialcode,
       //     job.data.otp
       //   );
+
+      case 'fib-signal':
+        return broadcastFibSignal();
 
       case 'fib-signals':
         return broadcastFibSignals();
