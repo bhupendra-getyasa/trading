@@ -8,6 +8,7 @@ const {
   top10Performers,
   broadcastFibSignal,
   broadcastFibSignals,
+  broadcastMostActive,
   broadcastWatchList,
   broadcastWatchListToUser
 } = require('./socket');
@@ -57,6 +58,9 @@ const worker = new Worker(
 
       case 'fib-signals':
         return broadcastFibSignals();
+
+      case 'most-active':
+        return broadcastMostActive(job.data);
 
       case 'watchlist':
         return broadcastWatchList();

@@ -12,6 +12,6 @@
   "dependencies": {
     "@trading/shared": "^1.0.0",
     "node-cron": "^4.2.1",
-    "playwright": "^1.60.0"
+    "playwright": "^1.61.0"
   }
 }

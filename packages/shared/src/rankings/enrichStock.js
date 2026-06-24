@@ -1,176 +1,66 @@
-// function enrichStock(
-//   stock,
-//   indicators
-// ) {
-//   return {
+// ─────────────────────────────────────────────────────────────────────────────
+//  enrichStock.js
+//  Merges AI score + trade plan into one stock object.
+//
+//  v6 changes:
+//  - Accepts optional intradayData and recentDayChanges for new scoring signals.
+//  - Passes them through to calculateAiScore.
+// ─────────────────────────────────────────────────────────────────────────────
 
-//     ...stock,
+const { calculateAiScore }               = require('./calculateAiScore.js');
+const { getRecommendation, getTradePlan } = require('./recommendation.js');
 
-//     trend_signal:
-//       indicators[
-//         "Bullish/Bearish Trend"
-//       ],
+/**
+ * @param {object}   stock             — normalizeStock() output
+ * @param {object}   indicators        — formula-engine results
+ * @param {Array}    historyRows       — [{price, volume, changePct}] newest-first
+ * @param {object}   [intradayData]    — NEW: optional intraday signals
+ * @param {number}   intradayData.first30minVol    — volume in first 30 min
+ * @param {number}   intradayData.last30minVol     — volume in last 30 min
+ * @param {number}   intradayData.intradayMovePct  — price move % in first 30 min
+ * @param {number[]} intradayData.recentDayChanges — [today%, yesterday%, dayBefore%]
+ */
+function enrichStock(stock, indicators = {}, historyRows = [], intradayData = {}) {
 
-//     buy_signal:
-//       indicators[
-//         "BUY Signal"
-//       ],
+  const { total: ai_score, dbVolRatio, breakdown: score_breakdown } =
+    calculateAiScore(stock, historyRows, intradayData);  // ← v6: pass intradayData
 
-//     momentum_rank:
-//       indicators[
-//         "Price Momentum Ranking"
-//       ],
-
-//     buying_pressure:
-//       indicators[
-//         "Strong Buying Pressure"
-//       ],
-
-//     volume_spike:
-//       indicators[
-//         "Volume Spike Detection"
-//       ],
-
-//     ai_score:
-//       calculateAiScore(
-//         stock,
-//         indicators
-//       ),
-
-//     liquidity:
-//       indicators[
-//         "Liquidity Detection"
-//       ],
-
-//     fake_movement:
-//       indicators[
-//         "Fake Movement Detection"
-//       ],
-//   };
-// }
-
-const { calculateAiScore } = require("./calculateAiScore.js");
-
-const { getRecommendation } = require("./recommendation.js");
-
-
-
-function enrichStock(
-  stock,
-  indicators
-) {
-
-  const ai_score = calculateAiScore(
-    stock
-  );
-
-  const recommendation =
-  getRecommendation({
-    ...stock,
-    ...indicators,
-    ai_score,
-  });
-
+  const tradePlan      = getTradePlan({ ...stock, ai_score });
+  const recommendation = getRecommendation({ ...stock, ...indicators, ai_score });
 
   return {
-
     ...stock,
 
-    trend_signal:
-      indicators[
-        "Bullish/Bearish Trend"
-      ] || null,
+    // Formula-engine indicators
+    trend_signal:    indicators['Bullish/Bearish Trend']   || null,
+    buy_signal:      indicators['BUY Signal']              || null,
+    momentum_rank:   indicators['Price Momentum Ranking']  || null,
+    buying_pressure: indicators['Strong Buying Pressure']  || null,
+    volume_spike:    indicators['Volume Spike Detection']  || null,
+    liquidity:       indicators['Liquidity Detection']     || 'Low',
+    fake_movement:   indicators['Fake Movement Detection'] || null,
 
-    buy_signal:
-      indicators[
-        "BUY Signal"
-      ] || null,
-
-    momentum_rank:
-      indicators[
-        "Price Momentum Ranking"
-      ] || null,
-
-    buying_pressure:
-      indicators[
-        "Strong Buying Pressure"
-      ] || null,
-
-    volume_spike:
-      indicators[
-        "Volume Spike Detection"
-      ] || null,
-
-    // ai_score:
-    //   calculateAiScore(
-    //     stock,
-    //     indicators
-    //   ) || null,
-
-    liquidity:
-      indicators[
-        "Liquidity Detection"
-      ] || "Low",
-
-    fake_movement:
-      indicators[
-        "Fake Movement Detection"
-      ] || null,
-
+    // AI score
     ai_score,
-
+    score_breakdown,
     recommendation,
+
+    // Expose DB-computed vol ratio for scoring.js composite (consistent)
+    db_vol_ratio: dbVolRatio,
+
+    // Trade plan fields
+    ...tradePlan,
+
+    // Meta
+    history_loaded: historyRows.length > 0,
+    history_days:   historyRows.length,
+
+    // NEW: expose intraday flags on the stock object for display/debugging
+    intraday_move_pct:     intradayData.intradayMovePct  || 0,
+    vol_direction:         (intradayData.last30minVol || 0) > (intradayData.first30minVol || 0) ? 'Accelerating' : 'Fading',
+    recent_day_changes:    intradayData.recentDayChanges || [],
+    zero_reason:           score_breakdown.zeroReason    || null,
   };
 }
 
-// function calculateAiScore(
-//   stock,
-//   indicators
-// ) {
-
-//   let score = 0;
-
-//   if (
-//     indicators[
-//       "Bullish/Bearish Trend"
-//     ] === "Bullish"
-//   ) {
-//     score += 20;
-//   }
-
-//   if (
-//     indicators[
-//       "BUY Signal"
-//     ] === "BUY"
-//   ) {
-//     score += 20;
-//   }
-
-//   if (
-//     indicators[
-//       "Strong Buying Pressure"
-//     ]
-//   ) {
-//     score += 20;
-//   }
-
-//   if (
-//     indicators[
-//       "Volume Spike Detection"
-//     ]
-//   ) {
-//     score += 20;
-//   }
-
-//   if (
-//     stock.volume_ratio > 1.5
-//   ) {
-//     score += 20;
-//   }
-
-//   return score;
-// }
-
-module.exports = {
-  enrichStock
-}
+module.exports = { enrichStock };

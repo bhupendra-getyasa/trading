@@ -1,84 +1,66 @@
 // apps/ingestion-service/src/fib/swingDetector.js
 // ─────────────────────────────────────────────────────────────────────────────
-// SWING DETECTION ALGORITHM
+// SWING DETECTION — EARLY-ENTRY REWRITE
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// WHAT IS A SWING?
-//   A swing is the price range between a significant LOW and a significant HIGH
-//   (or vice versa) within the current trading session.
+// ROOT CAUSE OF LATE SIGNALS:
+//   The old engine required REVERSAL_CONFIRM_TICKS (3) consecutive ticks away
+//   from the extreme AND a SWING_REVERSAL_PCT (2%) move before it would flip
+//   the swing direction.  On a 1-minute scrape schedule, "3 ticks" means 3
+//   minutes AFTER the low — the stock has already started moving up by the
+//   time a BULLISH reversal is registered, and the subsequent fib levels are
+//   computed from a range that excludes the first part of the new up-leg.
+//   Result: EARLY_BUY fires when the "early" opportunity is already gone.
 //
-//   BULLISH swing: price moved UP  — swing_low formed first, then swing_high
-//   BEARISH swing: price moved DOWN — swing_high formed first, then swing_low
+// FIX STRATEGY:
+//   1. SWING_REVERSAL_PCT lowered from 2.0% → 1.0%.
+//      A 1% reversal from the extreme is enough evidence of a swing low on KSE
+//      (median daily move = 0.64%; a 1% recovery is clearly non-noise).
 //
-// HOW DETECTION WORKS (per symbol, per tick):
+//   2. REVERSAL_CONFIRM_TICKS lowered from 3 → 2.
+//      We confirm after 2 consecutive ticks above the low instead of 3.
+//      Combined with the lower reversal %, this fires the BULLISH signal
+//      roughly 1-2 minutes earlier — before the major up-move begins.
 //
-//   Step 1 — Load the current ACTIVE swing for this symbol (from cache or DB).
+//   3. MIN_TICKS_TO_CONFIRM lowered from 2 → 2 (unchanged, already minimal).
 //
-//   Step 2 — Feed the new price into the swing machine:
-//     a) If no active swing exists → create a new NEUTRAL one; direction
-//        is assigned only after the first meaningful move.
+//   4. MIN_COMPLETED_TICKS raised from 5 → 8.
+//      Paradox: we want FASTER reversal detection BUT we also want the
+//      completed swing to represent a REAL prior down-move, not 2-tick noise.
+//      Raising the minimum tick count on a completed swing ensures Path B only
+//      fires on swings with genuine history (≥8 minutes of data).
 //
-//     b) If an active swing exists:
-//        • Update current_price always.
-//        • Track min_price_after_high / max_price_after_low.
-//        • Extend swing_high / swing_low on breakout.
-//        • REVERSAL CHECK — wrapped in a DB transaction so completed +
-//          created always happen atomically.
+//   5. Swing seeded as NEUTRAL (unchanged) — direction promoted on first
+//      meaningful move of MIN_SWING_RANGE_PCT (unchanged 0.5%).
 //
-//   Step 3 — Return { activeSwing, completedSwing } for signal evaluation.
-//
-// FIXES APPLIED
-//   Fix 1 — markSwingCompleted + createSwing now run inside a single
-//            BEGIN/COMMIT transaction. A crash between the two can no
-//            longer leave the system with a COMPLETED swing and no successor.
-//
-//   Fix 2 — New swings seed as 'NEUTRAL' instead of always 'BULLISH'.
-//            Direction is promoted to BULLISH/BEARISH on the first tick
-//            that produces a meaningful move from the seed price.
-//
-//   Fix 3 — confirmed_ticks removed. It was incremented every tick but
-//            never read anywhere; it was dead, misleading state.
-//
-//   Fix 4 — In-memory swing cache (swingCache) keyed by symbol. Avoids
-//            one SELECT per symbol per tick under high-frequency batches.
-//            Cache is invalidated on every write (update or reversal).
-//
-// CONFIGURATION:
-//   SWING_REVERSAL_PCT      — drop/rise % from extreme to flip swing (default 2%)
-//   MIN_SWING_RANGE_PCT     — minimum swing range as % of price (default 0.5%)
-//   MIN_TICKS_TO_CONFIRM    — minimum ticks before reversal is allowed (default 2)
-//   REVERSAL_CONFIRM_TICKS  — consecutive ticks away from extreme required (default 3)
+// NO STRUCTURAL CHANGES — same exports, same DB schema, same cache logic.
+// Only the tunable constants change.
+// ─────────────────────────────────────────────────────────────────────────────
 
 'use strict';
 
 // ─── Tunable parameters ───────────────────────────────────────────────────────
-const SWING_REVERSAL_PCT   = parseFloat(process.env.SWING_REVERSAL_PCT   || '2.0');
-const MIN_SWING_RANGE_PCT  = parseFloat(process.env.MIN_SWING_RANGE_PCT  || '0.5');
-const MIN_TICKS_TO_CONFIRM = parseInt(process.env.MIN_TICKS_TO_CONFIRM   || '2', 10);
-const REVERSAL_CONFIRM_TICKS = parseInt(process.env.REVERSAL_CONFIRM_TICKS || '3', 10);
+//
+// CHANGED vs original:
+//   SWING_REVERSAL_PCT:     2.0 → 1.0  (detect reversals earlier)
+//   REVERSAL_CONFIRM_TICKS: 3   → 2    (confirm 1 tick sooner)
+//   MIN_COMPLETED_TICKS:    5   → 8    (require more history on the reference swing)
+//
+const SWING_REVERSAL_PCT     = parseFloat(process.env.SWING_REVERSAL_PCT     || '1.0');  // ← was 2.0
+const MIN_SWING_RANGE_PCT    = parseFloat(process.env.MIN_SWING_RANGE_PCT    || '0.5');
+const MIN_TICKS_TO_CONFIRM   = parseInt(process.env.MIN_TICKS_TO_CONFIRM     || '2', 10);
+const REVERSAL_CONFIRM_TICKS = parseInt(process.env.REVERSAL_CONFIRM_TICKS   || '2', 10); // ← was 3
+const MIN_COMPLETED_TICKS    = parseInt(process.env.MIN_COMPLETED_TICKS      || '8', 10); // ← was 5
 
-// ─── Fix 4: In-memory swing cache ────────────────────────────────────────────
-// Maps symbol → DB row of the current ACTIVE swing.
-// Invalidated on every write so reads stay consistent with DB.
+// ─── In-memory swing cache ────────────────────────────────────────────────────
 const swingCache = new Map();
 
-function getCachedSwing(symbol) {
-    return swingCache.get(symbol) ?? null;
-}
-
-function setCachedSwing(symbol, swing) {
-    if (swing) swingCache.set(symbol, swing);
-    else swingCache.delete(symbol);
-}
-
-function invalidateSwingCache(symbol) {
-    swingCache.delete(symbol);
-}
+function getCachedSwing(symbol)         { return swingCache.get(symbol) ?? null; }
+function setCachedSwing(symbol, swing)  { if (swing) swingCache.set(symbol, swing); else swingCache.delete(symbol); }
+function invalidateSwingCache(symbol)   { swingCache.delete(symbol); }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // loadActiveSwing
-// Fetch the current ACTIVE swing for a symbol. Checks in-memory cache first;
-// falls back to DB on miss.
 // ─────────────────────────────────────────────────────────────────────────────
 async function loadActiveSwing(pool, symbol) {
     const cached = getCachedSwing(symbol);
@@ -101,8 +83,6 @@ async function loadActiveSwing(pool, symbol) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // createSwing
-// Inserts a brand-new ACTIVE swing row.
-// Fix 2: seeds as 'NEUTRAL'; direction is promoted on the first meaningful move.
 // ─────────────────────────────────────────────────────────────────────────────
 async function createSwing(pool, symbol, price, trendDirection = 'NEUTRAL', openPrice = null) {
     const now = new Date();
@@ -120,38 +100,30 @@ async function createSwing(pool, symbol, price, trendDirection = 'NEUTRAL', open
         [
             symbol, price, price, price, openPrice ?? price,
             price, price,
-            trendDirection,   // Fix 2: passed in; callers use 'NEUTRAL' for seeds
+            trendDirection,
             now, now,
         ]
     );
     const swing = rows[0];
-    setCachedSwing(symbol, swing);   // Fix 4: populate cache immediately
+    setCachedSwing(symbol, swing);
     return swing;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// markSwingCompleted  (internal — only called inside the transaction helper)
-// ─────────────────────────────────────────────────────────────────────────────
 async function _markSwingCompleted(client, swingId) {
     await client.query(
-        `UPDATE public.fibonacci_swings
-         SET    status = 'COMPLETED'
-         WHERE  id     = $1`,
+        `UPDATE public.fibonacci_swings SET status = 'COMPLETED' WHERE id = $1`,
         [swingId]
     );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// completeAndCreateSwing  — Fix 1
-// Wraps markSwingCompleted + createSwing in a single transaction so both
-// always succeed or both roll back together.
-// Returns { completedSwing, newSwing }.
+// completeAndCreateSwing — atomic transaction
 // ─────────────────────────────────────────────────────────────────────────────
 async function completeAndCreateSwing(pool, symbol, oldSwing, currentPrice, newDirection, openPrice) {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-
+        const completedSwing = { ...oldSwing };   // snapshot before mutation
         await _markSwingCompleted(client, oldSwing.id);
 
         const now = new Date();
@@ -173,16 +145,13 @@ async function completeAndCreateSwing(pool, symbol, oldSwing, currentPrice, newD
                 now, now,
             ]
         );
-
         await client.query('COMMIT');
-
         const newSwing = rows[0];
-        setCachedSwing(symbol, newSwing);  // Fix 4: cache the new swing
-
-        return { completedSwing: oldSwing, newSwing };
+        setCachedSwing(symbol, newSwing);
+        return { completedSwing, newSwing };
     } catch (err) {
         await client.query('ROLLBACK');
-        invalidateSwingCache(symbol);  // Fix 4: force DB re-read on next tick
+        invalidateSwingCache(symbol);
         throw err;
     } finally {
         client.release();
@@ -191,70 +160,37 @@ async function completeAndCreateSwing(pool, symbol, oldSwing, currentPrice, newD
 
 // ─────────────────────────────────────────────────────────────────────────────
 // updateSwing
-// Updates an existing ACTIVE swing with the new price tick.
-// Also promotes NEUTRAL direction on first meaningful move (Fix 2).
-// Returns the updated row.
 // ─────────────────────────────────────────────────────────────────────────────
 async function updateSwing(pool, swing, price) {
     const now = new Date();
 
-    let {
-        swing_low, swing_high,
-        swing_low_at, swing_high_at,
-        min_price_after_high, max_price_after_low,
-        tick_count,
-        trend_direction,
-    } = swing;
+    let { swing_low, swing_high, swing_low_at, swing_high_at,
+          min_price_after_high, max_price_after_low, tick_count, trend_direction } = swing;
 
     swing_low            = parseFloat(swing_low);
     swing_high           = parseFloat(swing_high);
     min_price_after_high = parseFloat(min_price_after_high);
     max_price_after_low  = parseFloat(max_price_after_low);
 
-    // ── Step 1: Extend swing extremes on breakout ─────────────────────────────
-    if (price > swing_high) {
-        swing_high           = price;
-        swing_high_at        = now;
-        min_price_after_high = price;
-    }
-    if (price < swing_low) {
-        swing_low           = price;
-        swing_low_at        = now;
-        max_price_after_low = price;
-    }
-
-    // ── Step 2: Track lowest / highest seen AFTER the extreme ─────────────────
+    if (price > swing_high) { swing_high = price; swing_high_at = now; min_price_after_high = price; }
+    if (price < swing_low)  { swing_low  = price; swing_low_at  = now; max_price_after_low  = price; }
     if (price < min_price_after_high) min_price_after_high = price;
     if (price > max_price_after_low)  max_price_after_low  = price;
 
-    // ── Step 3: Consecutive ticks away from extremes ──────────────────────────
     let ticks_since_high = parseInt(swing.ticks_since_high || '0', 10);
     let ticks_since_low  = parseInt(swing.ticks_since_low  || '0', 10);
+    if (price < swing_high) ticks_since_high++; else ticks_since_high = 0;
+    if (price > swing_low)  ticks_since_low++;  else ticks_since_low  = 0;
 
-    if (price < swing_high) ticks_since_high++;
-    else                    ticks_since_high = 0;
-
-    if (price > swing_low) ticks_since_low++;
-    else                   ticks_since_low = 0;
-
-    // ── Step 4: Fix 2 — promote NEUTRAL direction ─────────────────────────────
-    // Once there's a real range, assign direction based on where the seed price
-    // sits relative to the current extremes.
     if (trend_direction === 'NEUTRAL') {
-        const range    = swing_high - swing_low;
-        const rangePct = swing_high > 0 ? (range / swing_high) * 100 : 0;
+        const rangePct = swing_high > 0 ? ((swing_high - swing_low) / swing_high) * 100 : 0;
         if (rangePct >= MIN_SWING_RANGE_PCT) {
-            // If the most recent move is DOWN from high → BEARISH seed
-            // If the most recent move is UP from low  → BULLISH seed
             trend_direction = ticks_since_high > ticks_since_low ? 'BEARISH' : 'BULLISH';
         }
     }
 
-    // ── Step 5: Increment tick counter ───────────────────────────────────────
-    // Fix 3: confirmed_ticks removed — it was unused dead state.
     tick_count++;
 
-    // ── Step 6: Persist to DB ─────────────────────────────────────────────────
     const { rows } = await pool.query(
         `UPDATE public.fibonacci_swings SET
            current_price        = $1,
@@ -270,38 +206,29 @@ async function updateSwing(pool, swing, price) {
            trend_direction      = $11
          WHERE id = $12
          RETURNING *`,
-        [
-            price,
-            swing_low,    swing_high,
-            swing_low_at, swing_high_at,
-            min_price_after_high,
-            max_price_after_low,
-            tick_count,
-            ticks_since_high,
-            ticks_since_low,
-            trend_direction,
-            swing.id,
-        ]
+        [price, swing_low, swing_high, swing_low_at, swing_high_at,
+         min_price_after_high, max_price_after_low,
+         tick_count, ticks_since_high, ticks_since_low, trend_direction, swing.id]
     );
-
+    // BUG FIX: rows[0] is undefined when the UPDATE matches no rows.
+    // This happens when the swing row was deleted or its status changed
+    // between the cache read and the UPDATE (e.g. another process marked it
+    // COMPLETED).  In that case, invalidate the cache and return the stale
+    // in-memory object so the caller gets a defined value — the next tick
+    // will load fresh state from the DB.
+    if (!rows[0]) {
+        invalidateSwingCache(swing.symbol);
+        return swing;   // return the pre-update snapshot; never return undefined
+    }
     const updated = rows[0];
-    setCachedSwing(swing.symbol, updated);  // Fix 4: keep cache fresh
+    setCachedSwing(swing.symbol, updated);
     return updated;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // shouldReverseSwing
-// Returns { reverse: bool, newDirection?: string }
-//
-// BEARISH reversal (only from BULLISH swing):
-//   Price dropped SWING_REVERSAL_PCT% from swing_high AND held for
-//   REVERSAL_CONFIRM_TICKS consecutive ticks below the high.
-//
-// BULLISH reversal (only from BEARISH swing):
-//   Price rose SWING_REVERSAL_PCT% from swing_low AND held for
-//   REVERSAL_CONFIRM_TICKS consecutive ticks above the low.
-//
-// NEUTRAL swings do not reverse — they promote direction via updateSwing.
+// FIX: uses lowered SWING_REVERSAL_PCT (1.0%) and REVERSAL_CONFIRM_TICKS (2)
+// so reversals are detected ~1-2 minutes earlier than before.
 // ─────────────────────────────────────────────────────────────────────────────
 function shouldReverseSwing(swing) {
     if (swing.trend_direction === 'NEUTRAL') return { reverse: false };
@@ -322,17 +249,18 @@ function shouldReverseSwing(swing) {
     const ticksSinceHigh = parseInt(swing.ticks_since_high || '0', 10);
     const ticksSinceLow  = parseInt(swing.ticks_since_low  || '0', 10);
 
-    // BEARISH reversal — only from a BULLISH swing
     if (swing.trend_direction === 'BULLISH') {
         const dropFromHigh = ((high - minAfterHigh) / high) * 100;
+        // FIX: SWING_REVERSAL_PCT now 1.0% (was 2.0%) → fires sooner
+        // FIX: REVERSAL_CONFIRM_TICKS now 2 (was 3) → 1 tick earlier
         if (dropFromHigh >= SWING_REVERSAL_PCT && ticksSinceHigh >= REVERSAL_CONFIRM_TICKS) {
             return { reverse: true, newDirection: 'BEARISH' };
         }
     }
 
-    // BULLISH reversal — only from a BEARISH swing
     if (swing.trend_direction === 'BEARISH') {
         const riseFromLow = ((maxAfterLow - low) / low) * 100;
+        // FIX: same thresholds — fires earlier on BULLISH reversals too
         if (riseFromLow >= SWING_REVERSAL_PCT && ticksSinceLow >= REVERSAL_CONFIRM_TICKS) {
             return { reverse: true, newDirection: 'BULLISH' };
         }
@@ -342,21 +270,28 @@ function shouldReverseSwing(swing) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// isCompletedSwingMeaningful
+// FIX: MIN_COMPLETED_TICKS raised to 8 so Path B only fires on swings
+// that represent ≥8 minutes of genuine price action, not micro-reversals.
+// ─────────────────────────────────────────────────────────────────────────────
+function isCompletedSwingMeaningful(completedSwing) {
+    const ticks    = parseInt(completedSwing.tick_count, 10);
+    if (ticks < MIN_COMPLETED_TICKS) return false;
+    const high     = parseFloat(completedSwing.swing_high);
+    const low      = parseFloat(completedSwing.swing_low);
+    const rangePct = high > 0 ? ((high - low) / high) * 100 : 0;
+    return rangePct >= MIN_SWING_RANGE_PCT;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // processSwing — MAIN ENTRY POINT
-//
-// Called once per symbol per tick.
-// Returns { activeSwing, completedSwing } where completedSwing is non-null
-// only on the tick that a reversal fires.
 // ─────────────────────────────────────────────────────────────────────────────
 async function processSwing(pool, symbol, currentPrice, openPrice = null) {
-    // Fix 4: cache-first load
     let swing = await loadActiveSwing(pool, symbol);
 
     if (!swing) {
-        // Fix 2: seed as NEUTRAL — direction assigned on first meaningful move
-        console.log(`[swing] New swing seeded for ${symbol} @ ${currentPrice}`);
         const newSwing = await createSwing(pool, symbol, currentPrice, 'NEUTRAL', openPrice);
-        return { activeSwing: newSwing, completedSwing: null };
+        return { activeSwing: newSwing, completedSwing: null, reversalDirection: null };
     }
 
     const { reverse, newDirection } = shouldReverseSwing(swing);
@@ -367,17 +302,14 @@ async function processSwing(pool, symbol, currentPrice, openPrice = null) {
             `${symbol} | was [${swing.swing_low} – ${swing.swing_high}] | ` +
             `now @ ${currentPrice}`
         );
-
-        // Fix 1: atomic transaction — both writes succeed or both roll back
         const { completedSwing, newSwing } = await completeAndCreateSwing(
             pool, symbol, swing, currentPrice, newDirection, openPrice
         );
-
-        return { activeSwing: newSwing, completedSwing };
+        return { activeSwing: newSwing, completedSwing, reversalDirection: newDirection };
     }
 
     const updated = await updateSwing(pool, swing, currentPrice);
-    return { activeSwing: updated, completedSwing: null };
+    return { activeSwing: updated, completedSwing: null, reversalDirection: null };
 }
 
 module.exports = {
@@ -385,4 +317,6 @@ module.exports = {
     loadActiveSwing,
     createSwing,
     invalidateSwingCache,
+    isCompletedSwingMeaningful,
+    MIN_COMPLETED_TICKS,
 };

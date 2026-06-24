@@ -15,7 +15,8 @@ async function start() {
   await initBrowser();
 
   cron.schedule(
-    '*/1 9-12 * * 0-4',
+    // '*/1 9-12 * * 0-4',
+    '* * * * *',
     async () => {
 
       const activeJobs =

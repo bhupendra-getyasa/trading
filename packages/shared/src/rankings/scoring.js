@@ -1,109 +1,34 @@
-function calculateCompositeScore(
-  stock
-) {
-  // ----------------------------------------
-  // MOMENTUM SCORE
-  // ----------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+//  scoring.js — composite score for final display ranking
+//
+//  ai_score is the primary signal (80% weight).
+//  Two tie-breakers for stocks with the same ai_score:
+//    • DB vol ratio (15%) — uses db_vol_ratio from enrichStock, NOT the
+//      TradingView avg_volume ratio. This keeps both calculations consistent.
+//    • Value traded (5%)  — higher KWD value = more liquid, safer to execute.
+//
+//  BUG FIX vs v4: was using stock.volume_ratio (TradingView avg_volume) which
+//  is inconsistent with the DB 20-day avg used inside calculateAiScore.
+// ─────────────────────────────────────────────────────────────────────────────
 
-  const momentumScore =
-    normalize(
-      Math.abs(stock.percent_change),
-      0,
-      10
-    ) * 40;
+function calculateCompositeScore(stock) {
+  const aiScore    = stock.ai_score     || 0;
+  // Use DB-computed ratio (from calculateAiScore) for consistency.
+  // Fall back to normalizeStock ratio only if db_vol_ratio not present.
+  const volRatio   = stock.db_vol_ratio ?? stock.volume_ratio ?? 0;
+  const price      = stock.price        || 0;
+  const volume     = stock.volume       || 0;
+  const valueTraded = price * volume;
 
-  // ----------------------------------------
-  // VOLUME RATIO
-  // ----------------------------------------
+  const base         = aiScore * 0.80;
+  const volBreaker   = Math.min(volRatio / 5, 1) * 15;
+  const valBreaker   = Math.min(valueTraded / 10_000_000, 1) * 5;
 
-  const volumeRatio =
-    stock.avg_volume > 0
-      ? stock.volume /
-        stock.avg_volume
-      : 0;
+  const compositeScore = Math.min(100, Math.max(0,
+    +(base + volBreaker + valBreaker).toFixed(2)
+  ));
 
-  const volumeScore =
-    normalize(volumeRatio, 0, 5) *
-    25;
-
-  // ----------------------------------------
-  // AI SCORE
-  // ----------------------------------------
-
-  const aiScore =
-    normalize(stock.ai_score, 0, 100) *
-    20;
-
-  // ----------------------------------------
-  // LIQUIDITY BONUS
-  // ----------------------------------------
-
-  let liquidityBonus = 0;
-
-  if (stock.liquidity === "High") {
-    liquidityBonus = 10;
-  }
-
-  if (
-    stock.liquidity === "Medium"
-  ) {
-    liquidityBonus = 5;
-  }
-
-  // ----------------------------------------
-  // MARKET CAP BONUS
-  // ----------------------------------------
-
-  let marketCapBonus = 0;
-
-  if (
-    stock.market_cap > 20000000000
-  ) {
-    marketCapBonus = 15;
-  } else if (
-    stock.market_cap > 10000000000
-  ) {
-    marketCapBonus = 10;
-  } else if (
-    stock.market_cap > 5000000000
-  ) {
-    marketCapBonus = 7;
-  } else if (
-    stock.market_cap > 1000000000
-  ) {
-    marketCapBonus = 3;
-  }
-
-  // ----------------------------------------
-  // FINAL
-  // ----------------------------------------
-
-  const total =
-    momentumScore +
-    volumeScore +
-    aiScore +
-    liquidityBonus +
-    marketCapBonus;
-
-  return {
-    volumeRatio,
-    compositeScore:
-      total > 100 ? 100 : total,
-  };
+  return { compositeScore, volumeRatio: +volRatio.toFixed(2) };
 }
 
-function normalize(
-  value,
-  min,
-  max
-) {
-  if (value <= min) return 0;
-
-  if (value >= max) return 1;
-
-  return (value - min) / (max - min);
-}
-
-module.exports = {
-  calculateCompositeScore,
-};
+module.exports = { calculateCompositeScore };
