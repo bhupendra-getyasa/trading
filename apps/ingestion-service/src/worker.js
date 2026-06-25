@@ -10,7 +10,7 @@ const { processTopPerformers } = require('@trading/shared/src/rankings/processTo
 
 const { scrapeStocks } = require('./scraper');
 const { publishStock } = require('./publisher');
-const { processBatch } = require('./fib/fibProcessor'); 
+const { processBatch } = require('./fib/fibProcessor');
 const { computeMostActive } = require('@trading/shared/src/rankings/mostActive.js');
 
 let count = 0;
@@ -47,21 +47,22 @@ const worker = new Worker(
 
       const stocks = await scrapeStocks();
       await publishStock(stocks);
+
       console.log(`[${new Date().toISOString()}] Scraping finished — ${stocks.length} stocks`);
 
-      // ─────────────────────────────────────────────────────────────────────
-      // JOB: stock-update  (published by publisher.js after each scrape)
-      // ─────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────
+    // JOB: stock-update  (published by publisher.js after each scrape)
+    // ─────────────────────────────────────────────────────────────────────
     } else if (job.name === 'stock-update') {
       const trades = job.data;
 
       if (!trades || trades.length === 0) return;
 
-      // ── 1. Cache in Redis ─────────────────────────────────────────────
+      // ── 1. Cache in Redis ───────────────────────────────────────────────
       await connection.set('latest_trades', JSON.stringify(trades));
       console.log('Updated Redis with latest trades');
 
-      // ── 2. Bulk-insert into Postgres ──────────────────────────────────
+      // ── 2. Bulk-insert into Postgres ────────────────────────────────────
       const values = [];
       const createdAt = new Date().toISOString();
 
@@ -98,15 +99,12 @@ const worker = new Worker(
       try {
         const { rows: stocks } = await pool.query(query, values);
         console.log(`Inserted ${trades.length} trades into DB`);
-        await socketQueue.add('watchlist', {}, {
-          removeOnComplete: true,
-          removeOnFail: true
-        });
-        await socketQueue.add('fib-signals', {}, {
-          removeOnComplete: true,
-          removeOnFail: true
-        });
 
+        // ── 3. Trigger socket events ──────────────────────────────────────
+        await socketQueue.add('watchlist', {}, { removeOnComplete: true, removeOnFail: true });
+        await socketQueue.add('fib-signals', {}, { removeOnComplete: true, removeOnFail: true });
+
+        // ── 4. Fetch intraday rows for today ──────────────────────────────
         const { rows: todayIntradayRows } = await pool.query(`
           SELECT symbol, last_price, volume, change_percent, created_at
           FROM public.market_stock_snapshots
@@ -114,14 +112,15 @@ const worker = new Worker(
           ORDER BY created_at ASC
         `);
 
+        // ── 5. Fetch recent closing rows (last 4 days) ────────────────────
         const { rows: closingRows } = await pool.query(`
           SELECT symbol, change_percent, DATE(created_at AT TIME ZONE 'Asia/Kuwait') AS trade_date
           FROM (
             SELECT symbol, change_percent, created_at,
-                  ROW_NUMBER() OVER (
-                    PARTITION BY symbol, DATE(created_at AT TIME ZONE 'Asia/Kuwait')
-                    ORDER BY created_at DESC
-                  ) AS rn
+              ROW_NUMBER() OVER (
+                PARTITION BY symbol, DATE(created_at AT TIME ZONE 'Asia/Kuwait')
+                ORDER BY created_at DESC
+              ) AS rn
             FROM public.market_stock_snapshots
             WHERE created_at >= NOW() - INTERVAL '4 days'
           ) ranked
@@ -129,36 +128,27 @@ const worker = new Worker(
           ORDER BY symbol, trade_date DESC
         `);
 
-        // Now build the Map
+        // ── 6. Build recent closing map ───────────────────────────────────
         const recentClosingMap = new Map();
         for (const row of closingRows) {
-          const pct = parseFloat(String(row.change_percent).replace('%','').replace('−','-')) || 0;
+          const pct = parseFloat(String(row.change_percent).replace('%', '').replace('−', '-')) || 0;
           if (!recentClosingMap.has(row.symbol)) recentClosingMap.set(row.symbol, []);
-          recentClosingMap.get(row.symbol).push(pct); // pushes newest first: [today, yesterday, dayBefore]
+          recentClosingMap.get(row.symbol).push(pct); // newest first: [today, yesterday, dayBefore]
         }
 
-        // ── 3. Top performers (existing logic — unchanged) ─────────────
+        // ── 7. Top performers ─────────────────────────────────────────────
         const formulas = await loadFormulas(pool);
         const top10 = await processTopPerformers(stocks, formulas, pool, todayIntradayRows, recentClosingMap);
 
         await connection.set('top_performers', JSON.stringify(top10));
-        await socketQueue.add('top-performers', top10, {
-          removeOnComplete: true,
-          removeOnFail: true
-        });
+        await socketQueue.add('top-performers', top10, { removeOnComplete: true, removeOnFail: true });
 
-        // ── 4. Most Active — Top Gainers / Top Losers / Top Value ──────
-        // computeMostActive runs entirely in-memory on the DB rows we
-        // already have (stocks[]).  No extra query needed.
-        // Result is cached in Redis ('most_active') so new WebSocket
-        // connections get it instantly, then broadcast to live clients.
+        // ── 8. Most active (gainers / losers / top value) ─────────────────
         try {
           const mostActive = computeMostActive(stocks);
           await connection.set('most_active', JSON.stringify(mostActive));
-          await socketQueue.add('most-active', mostActive, {
-            removeOnComplete: true,
-            removeOnFail:     true,
-          });
+          await socketQueue.add('most-active', mostActive, { removeOnComplete: true, removeOnFail: true });
+
           console.log(
             `[most-active] gainers:${mostActive.gainers.length}` +
             ` losers:${mostActive.losers.length}` +
@@ -168,15 +158,13 @@ const worker = new Worker(
           console.error('[most-active] compute error:', err.message);
         }
 
-        // ── 5. Fibonacci swing detection & signal generation ────────────
-        // stocks[] are DB rows (snake_case) — fibProcessor handles both formats
-        // Run in background — don't await so it doesn't delay the main job
+        // ── 9. Fibonacci swing detection (non-blocking) ───────────────────
         processBatch(pool, stocks).catch(err => {
           console.error('[fib] processBatch error:', err.message);
         });
 
       } catch (err) {
-        console.error('Error inserting trades:', err);
+        console.error(`[${new Date().toISOString()}] Error inserting trades:`, err.message);
       }
     }
   },
@@ -186,7 +174,7 @@ const worker = new Worker(
   }
 );
 
-worker.on('completed', (job) => console.log('Job completed:', job.id));
-worker.on('failed', (job, err) => console.error('Job failed:', job.id, err));
+worker.on('completed', (job) => console.log(`[${new Date().toISOString()}] Job completed:`, job.id));
+worker.on('failed', (job, err) => console.error(`[${new Date().toISOString()}] Job failed:`, job.id, err.message));
 
 module.exports = worker;
