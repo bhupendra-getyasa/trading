@@ -23,6 +23,7 @@ router.post("/add-stock", async (req, res) => {
       FROM watchlists
       WHERE user_id = $1
         AND symbol = $2
+        AND created_at::date = CURRENT_DATE
         AND is_active = true
         AND is_deleted = false
     `, [userId, symbol]);

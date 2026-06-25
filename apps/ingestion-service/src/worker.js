@@ -30,8 +30,8 @@ const worker = new Worker(
       //   WITH scrape_times AS (
       //     SELECT DISTINCT created_at
       //     FROM public.market_stock_snapshots
-      //     WHERE created_at >= date_trunc('day', NOW()) + INTERVAL '7 hour 50 minute'
-      //       AND created_at <  date_trunc('day', NOW()) + INTERVAL '10 hour'
+      //     WHERE created_at >= date_trunc('day', NOW() - INTERVAL '4 day') + INTERVAL '6 hour'
+      //       AND created_at <  date_trunc('day', NOW() - INTERVAL '4 day') + INTERVAL '10 hour'
       //     ORDER BY created_at
       //     OFFSET $1 LIMIT 1
       //   )
@@ -147,7 +147,28 @@ const worker = new Worker(
           removeOnFail: true
         });
 
-        // ── 4. NEW: Fibonacci swing detection & signal generation ───────
+        // ── 4. Most Active — Top Gainers / Top Losers / Top Value ──────
+        // computeMostActive runs entirely in-memory on the DB rows we
+        // already have (stocks[]).  No extra query needed.
+        // Result is cached in Redis ('most_active') so new WebSocket
+        // connections get it instantly, then broadcast to live clients.
+        try {
+          const mostActive = computeMostActive(stocks);
+          await connection.set('most_active', JSON.stringify(mostActive));
+          await socketQueue.add('most-active', mostActive, {
+            removeOnComplete: true,
+            removeOnFail:     true,
+          });
+          console.log(
+            `[most-active] gainers:${mostActive.gainers.length}` +
+            ` losers:${mostActive.losers.length}` +
+            ` topValue:${mostActive.topValue.length}`
+          );
+        } catch (err) {
+          console.error('[most-active] compute error:', err.message);
+        }
+
+        // ── 5. Fibonacci swing detection & signal generation ────────────
         // stocks[] are DB rows (snake_case) — fibProcessor handles both formats
         // Run in background — don't await so it doesn't delay the main job
         processBatch(pool, stocks).catch(err => {

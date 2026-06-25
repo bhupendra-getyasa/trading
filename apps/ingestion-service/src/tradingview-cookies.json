@@ -1,0 +1,152 @@
+[
+  {
+    "name": "_GRECAPTCHA",
+    "value": "09AKhCRwhOu0DtD-RlcEFAZ4yZ2HlpuGJYVusPMGoxRnDlqBgJO6VASYYUz-W_ZJKNWcXJf1d8Wfl1K_txjuD9r6U",
+    "domain": "www.recaptcha.net",
+    "path": "/recaptcha",
+    "expires": 1797854707.790213,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "g_state",
+    "value": "{\"i_l\":0,\"i_ll\":1782302689134,\"i_b\":\"xMZqjMHgFWqDJFshs606+hf5Q2X5AgOSoS20cjHfl34\",\"i_e\":{\"enable_itp_optimization\":24},\"i_et\":1782302689134}",
+    "domain": "www.tradingview.com",
+    "path": "/",
+    "expires": 1797854689,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "NID",
+    "value": "532=ucN5sf4RBp5J2T6SZEsWk5RgVTl9cLaHfxtCtKGVBcaL3NubDJThXYYdFoeodUaQ-RwOxc9M6yzV9bkBLN1YhgpCVHvJ36BA_YP8f2gS6dA0J9CSwjn6tAHGDAVx1slQ3giAB0A2Sq8JDPGwYlxfrRmWds64QPQiKc8T6tSwbs1uF7q7nNagZtH05ivnbg3wrQ7p_KU",
+    "domain": ".google.com",
+    "path": "/",
+    "expires": 1798113890.712796,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "device_t",
+    "value": "TmgwaENBOjI.gzswVfk0WQOx5RGUAj2tt0TK06M4bRSO3RPm_L7hqfw",
+    "domain": ".tradingview.com",
+    "path": "/",
+    "expires": 1813406723.212628,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "sessionid",
+    "value": "q591qmx7f17zh45j9vgffs7aq61dgx8k",
+    "domain": ".tradingview.com",
+    "path": "/",
+    "expires": 1790337923.212787,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "sessionid_sign",
+    "value": "v3:bTt8GqfKOWHGJ3ISflIB0UIVAnfYJG8qXm+z3xKtrMM=",
+    "domain": ".tradingview.com",
+    "path": "/",
+    "expires": 1790337923.212861,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "etg",
+    "value": "undefined",
+    "domain": ".tradingview.com",
+    "path": "/",
+    "expires": 1816862723.504923,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "cachec",
+    "value": "undefined",
+    "domain": ".tradingview.com",
+    "path": "/",
+    "expires": 1816862723.512179,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_sp_ses.cf1a",
+    "value": "*",
+    "domain": ".tradingview.com",
+    "path": "/",
+    "expires": 1790078728,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "cookiePrivacyPreferenceBannerProduction",
+    "value": "notApplicable",
+    "domain": ".tradingview.com",
+    "path": "/",
+    "expires": 1816862728.017765,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_ga",
+    "value": "GA1.1.129695690.1782302728",
+    "domain": ".tradingview.com",
+    "path": "/",
+    "expires": 1816862728.019921,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_ga_YVVRYGL0E0",
+    "value": "GS2.1.s1782302727$o1$g0$t1782302728$j60$l0$h0",
+    "domain": ".tradingview.com",
+    "path": "/",
+    "expires": 1816862728.027008,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "cookiesSettings",
+    "value": "{\"analytics\":true,\"advertising\":true}",
+    "domain": ".tradingview.com",
+    "path": "/",
+    "expires": 1816862728.030399,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_sp_id.cf1a",
+    "value": "657e6bd9-339d-49eb-b77a-b5f7d2a53f01.1782302726.1.1782302728..5831f3c5-1944-4475-b8e9-59381dc7545f..a8259279-860b-4bbd-9f00-ec144e9b5ea4.1782302726990.2",
+    "domain": ".tradingview.com",
+    "path": "/",
+    "expires": 1816862728.031956,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "_gcl_au",
+    "value": "1.1.2131981214.1782302728",
+    "domain": ".tradingview.com",
+    "path": "/",
+    "expires": 1790078728,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  }
+]
