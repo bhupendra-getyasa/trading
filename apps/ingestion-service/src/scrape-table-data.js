@@ -5,7 +5,7 @@ const { Pool } = require('pg');
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
 const COOKIES_PATH = path.resolve(__dirname, 'tradingview-cookies.json');
-const SYMBOLS_PATH = path.resolve(__dirname, 'symbols2.json');
+const SYMBOLS_PATH = path.resolve(__dirname, 'symbols.json');
 const PROGRESS_PATH = path.resolve(__dirname, 'scrape-progress.json');
 const FAILED_PATH   = path.resolve(__dirname, 'failed-symbols.json');
 

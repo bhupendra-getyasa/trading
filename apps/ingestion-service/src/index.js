@@ -38,7 +38,7 @@ async function start() {
 
   // ─── Daily at 5:30 PM: scrape data ─────────────────────────────────────────
   cron.schedule(
-    '30 17 * * *',
+    '40 17 * * *',
     async () => {
       try {
         console.log(`[${new Date().toISOString()}] Data scrapping...`);
