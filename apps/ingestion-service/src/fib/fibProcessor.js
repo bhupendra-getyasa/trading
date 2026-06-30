@@ -57,7 +57,7 @@
 'use strict';
 
 const { parsePrice }                          = require('@trading/shared/src/normalization/parsePrice');
-const { processSwing, isCompletedSwingMeaningful } = require('./swingDetector');
+const { processSwing, isCompletedSwingMeaningful, invalidateSwingCache } = require('./swingDetector');
 const {
     computeAllLevels,
     findTouchedLevels,
@@ -282,6 +282,24 @@ async function processOneTick(pool, stock) {
     if (!activeSwing) {
         console.warn(`[processOneTick] ${symbol}: processSwing returned no activeSwing — skipping tick`);
         return null;
+    }
+
+    // GUARD: updateSwing() returns the stale in-memory object (not undefined)
+    // when the DB row is gone (see swingDetector.js). The stale id will cause
+    // an FK violation in fibonacci_signals. Detect this by checking that the
+    // activeSwing id still exists in the DB before proceeding.
+    // We only do this check when no reversal fired (on reversal, completeAndCreateSwing
+    // uses a transaction so the new row is guaranteed to exist).
+    if (!completedSwing) {
+        const { rows: swingExists } = await pool.query(
+            `SELECT 1 FROM public.fibonacci_swings WHERE id = $1 LIMIT 1`,
+            [activeSwing.id]
+        );
+        if (swingExists.length === 0) {
+            console.warn(`[processOneTick] ${symbol}: activeSwing id ${activeSwing.id} gone from DB (stale cache) — invalidating and skipping tick`);
+            invalidateSwingCache(symbol);
+            return null;
+        }
     }
 
     // ── 2. ZONE 1: Retracement touch (faster, 1+1 tick confirmation) ─────────

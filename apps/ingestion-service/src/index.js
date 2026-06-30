@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const { connection, stockQueue } = require('@trading/shared');
+const { main } = require('./scrape-table-data')
 require('./worker');
 
 async function start() {
@@ -30,6 +31,21 @@ async function start() {
         );
       } catch (err) {
         console.error(`[${new Date().toISOString()}] Failed to schedule scrape job:`, err.message);
+      }
+    },
+    { timezone: 'Asia/Kuwait' }
+  );
+
+  // ─── Daily at 5:30 PM: scrape data ─────────────────────────────────────────
+  cron.schedule(
+    '30 17 * * *',
+    async () => {
+      try {
+        console.log(`[${new Date().toISOString()}] Data scrapping...`);
+        await main()
+        console.log(`[${new Date().toISOString()}] Data scrapped`);
+      } catch (err) {
+        console.error(`[${new Date().toISOString()}] Data scrap failed:`, err.message);
       }
     },
     { timezone: 'Asia/Kuwait' }

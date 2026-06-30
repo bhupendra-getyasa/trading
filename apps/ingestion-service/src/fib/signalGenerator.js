@@ -69,6 +69,20 @@ async function saveSignal(pool, {
     swingLow, swingHigh, trendDirection,
     signalType, signalStrength, approachDirection,
 }) {
+    // GUARD: verify the swing still exists before inserting.
+    // updateSwing() returns the stale in-memory swing when its DB row has been
+    // deleted or completed by a concurrent process (see swingDetector.js comment).
+    // That stale id no longer exists in fibonacci_swings, so any INSERT into
+    // fibonacci_signals with it will throw the FK violation we see in production.
+    const { rows: swingCheck } = await pool.query(
+        `SELECT 1 FROM public.fibonacci_swings WHERE id = $1 LIMIT 1`,
+        [swingId]
+    );
+    if (swingCheck.length === 0) {
+        console.warn(`[saveSignal] Skipping signal for ${symbol} — swing id ${swingId} no longer exists in DB (stale cache)`);
+        return null;
+    }
+
     const swingRange = parseFloat(swingHigh) - parseFloat(swingLow);
 
     // BUG FIX: the unique index uq_fib_signal (swing_id, fib_level_percent, signal_type)
