@@ -53,20 +53,46 @@ CREATE TABLE IF NOT EXISTS ${T.state} (
 CREATE INDEX IF NOT EXISTS scanner_state_day_idx ON ${T.state} (processed_day);
 
 CREATE TABLE IF NOT EXISTS ${T.session} (
-  trading_day date PRIMARY KEY, budget_kd numeric, updated_at timestamptz NOT NULL DEFAULT now());`;
+  trading_day date PRIMARY KEY, budget_kd numeric, updated_at timestamptz NOT NULL DEFAULT now());
 
-async function ensureTables(db) { await db.query(DDL); }
+-- Indexes on the (ever-growing) snapshots table — without these the per-minute
+-- live scan does full-table scans + sorts and takes minutes.
+CREATE INDEX IF NOT EXISTS market_stock_snapshots_symbol_created_idx
+  ON ${T.snapshots} (symbol, created_at DESC);
+CREATE INDEX IF NOT EXISTS market_stock_snapshots_created_idx
+  ON ${T.snapshots} (created_at DESC);`;
+
+// Run the DDL only ONCE per process, not on every scan cycle.
+let _tablesReady = false;
+async function ensureTables(db) {
+  if (_tablesReady) return;
+  await db.query(DDL);
+  _tablesReady = true;
+}
 
 async function loadLatestSymbols(db) {
-  const { rows } = await db.query(`SELECT DISTINCT ON (symbol) symbol FROM ${T.snapshots} ORDER BY symbol, created_at DESC;`);
+  // Only symbols that traded in the last 2 days — index scan instead of full scan.
+  const { rows } = await db.query(
+    `SELECT DISTINCT ON (symbol) symbol FROM ${T.snapshots}
+     WHERE created_at >= NOW() - INTERVAL '2 days'
+     ORDER BY symbol, created_at DESC;`);
   return rows.map((r) => r.symbol);
 }
 async function loadWindows(db, symbols, n = CONFIG.WINDOW.snapshots) {
   if (!symbols.length) return new Map();
+  // Top-N per symbol via LATERAL + LIMIT — uses the (symbol, created_at DESC)
+  // index to read only n rows per symbol, no full-window scan/sort.
   const { rows } = await db.query(
-    `SELECT symbol, last_price, change_percent, volume, avg_volume, created_at FROM (
-       SELECT *, row_number() OVER (PARTITION BY symbol ORDER BY created_at DESC) rn
-       FROM ${T.snapshots} WHERE symbol = ANY($1)) t WHERE rn <= $2 ORDER BY symbol, created_at ASC;`,
+    `SELECT w.symbol, w.last_price, w.change_percent, w.volume, w.avg_volume, w.created_at
+       FROM unnest($1::text[]) AS sym(symbol)
+       CROSS JOIN LATERAL (
+         SELECT s.symbol, s.last_price, s.change_percent, s.volume, s.avg_volume, s.created_at
+         FROM ${T.snapshots} s
+         WHERE s.symbol = sym.symbol
+         ORDER BY s.created_at DESC
+         LIMIT $2
+       ) w
+      ORDER BY w.symbol, w.created_at ASC;`,
     [symbols, n]);
   const m = new Map();
   for (const r of rows) { if (!m.has(r.symbol)) m.set(r.symbol, []); m.get(r.symbol).push(r); }
@@ -157,5 +183,54 @@ async function markProcessed(db, { symbol, tradingDay, outcome, profile, trend, 
        profile=EXCLUDED.profile, trend=EXCLUDED.trend, processed_ts=EXCLUDED.processed_ts, updated_at=now();`,
     [symbol, tradingDay, outcome ?? null, profile ?? null, trend ?? null, new Date(now).toISOString()]);
 }
+// ─── Batched writes — one round-trip each instead of one per symbol ──────────
+async function saveRadarEvents(db, events, runTs, version, day) {
+  if (!events.length) return;
+  const cols = ['run_ts','symbol','trading_day','engine_version','entry_type','reasons','profile','trend','lane','swing1_fils','entry_price','reject_reason','history_qualifies','outcome'];
+  const params = [];
+  const tuples = events.map((e, i) => {
+    const b = i * cols.length;
+    params.push(runTs, e.symbol, day, version, e.entry_type ?? null, JSON.stringify(e.reasons ?? []),
+      e.profile ?? null, e.trend ?? null, e.lane ?? null, e.swing1_fils ?? null, e.entry_price ?? null,
+      e.reject_reason ?? null, e.history_qualifies ?? null, e.outcome ?? null);
+    return '(' + cols.map((_, k) => `$${b + k + 1}`).join(',') + ')';
+  });
+  await db.query(`INSERT INTO ${T.events} (${cols.join(',')}) VALUES ${tuples.join(',')} ON CONFLICT (run_ts, symbol) DO NOTHING;`, params);
+}
+
+async function insertOpportunities(db, opps, version, day) {
+  if (!opps.length) return;
+  const cols = ['symbol','trigger_ts','trading_day','engine_version','profile','trend','lane','entry_type','entry_price','swing1_fils','swings_so_far','expected_fils','net_fils','price_band','rvol','change_pct','value_traded','volume','avg_volume','suggested_shares','contracts','kd_needed','est_profit_kd','size_tag','warnings','reasons','fib','status'];
+  const params = [];
+  const tuples = opps.map((o, i) => {
+    const b = i * cols.length;
+    params.push(o.symbol, o.trigger_ts, day, version, o.profile ?? null, o.trend ?? null, o.lane ?? null,
+      o.entry_type ?? null, o.entry_price ?? null, o.swing1_fils ?? null, o.swings_so_far ?? null,
+      o.expected_fils ?? null, o.net_fils ?? null, o.price_band ?? null, o.rvol ?? null, o.change_pct ?? null,
+      o.value_traded ?? null, o.volume ?? null, o.avg_volume ?? null, o.suggested_shares ?? null,
+      o.contracts ?? null, o.kd_needed ?? null, o.est_profit_kd ?? null, o.size_tag ?? null,
+      JSON.stringify(o.warnings ?? []), JSON.stringify(o.reasons ?? []), JSON.stringify(o.fib ?? null), 'OPEN');
+    return '(' + cols.map((_, k) => `$${b + k + 1}`).join(',') + ')';
+  });
+  await db.query(`INSERT INTO ${T.opps} (${cols.join(',')}) VALUES ${tuples.join(',')} ON CONFLICT (symbol, trigger_ts) DO NOTHING;`, params);
+}
+
+async function markProcessedBatch(db, rows) {
+  if (!rows.length) return;
+  const cols = ['symbol','processed_day','outcome','profile','trend','processed_ts'];
+  const params = [];
+  const tuples = rows.map((r, i) => {
+    const b = i * cols.length;
+    params.push(r.symbol, r.tradingDay, r.outcome ?? null, r.profile ?? null, r.trend ?? null, new Date(r.now).toISOString());
+    return '(' + cols.map((_, k) => `$${b + k + 1}`).join(',') + ',now())';
+  });
+  await db.query(
+    `INSERT INTO ${T.state} (${cols.join(',')},updated_at) VALUES ${tuples.join(',')}
+     ON CONFLICT (symbol) DO UPDATE SET processed_day=EXCLUDED.processed_day, outcome=EXCLUDED.outcome,
+       profile=EXCLUDED.profile, trend=EXCLUDED.trend, processed_ts=EXCLUDED.processed_ts, updated_at=now();`,
+    params);
+}
+
 module.exports = { TABLES: T, DDL, ensureTables, loadLatestSymbols, loadWindows, loadClassifications,
-  loadBudget, loadProcessedToday, saveSignals, saveRadarEvent, insertOpportunity, markProcessed, getRejectedList, getReclassificationCandidates };
+  loadBudget, loadProcessedToday, saveSignals, saveRadarEvent, insertOpportunity, markProcessed, getRejectedList, getReclassificationCandidates,
+  saveRadarEvents, insertOpportunities, markProcessedBatch };

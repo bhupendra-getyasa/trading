@@ -29,7 +29,6 @@ router.post("/send-otp", async (req, res) => {
 
 router.post("/verify-otp", async (req, res) => {
     const { phone, dialcode, otp } = req.body;
-    console.log('req.headers: ', req.headers.pathname);
 
     const storedOtp = await connection.get(
         `otp:${phone}`
@@ -110,8 +109,6 @@ router.post("/refresh-token", async (req, res) => {
     const refreshToken =
         req.cookies?.refreshToken;
 
-    console.log('cookies: ', req.cookie);
-
     if (!refreshToken) {
         return res.status(401).json({
             success: false,
@@ -165,7 +162,6 @@ router.post("/logout", async (req, res) => {
 
   const refreshToken =
   req.headers.refreshToken;
-  console.log('refreshToken: ', refreshToken);
 
   if (refreshToken) {
 

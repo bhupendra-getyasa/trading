@@ -1,6 +1,3 @@
-// =============================================================================
-// apps/signal-engine/src/transform.js
-//
 // TRANSFORMATION SERVICE
 // Reads from:  public.stock_prices       (1-min raw OHLCV)
 // Writes to:   public.stock_prices_daily (35 computed metrics)

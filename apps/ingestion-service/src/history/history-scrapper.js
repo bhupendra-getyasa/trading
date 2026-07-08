@@ -20,22 +20,6 @@ if (!fs.existsSync(TMP_DIR)) {
 const PROGRESS_PATH = path.join(TMP_DIR, 'scrape-progress.json');
 const FAILED_PATH   = path.resolve(TMP_DIR, 'failed-symbols.json');
 
-// ─── DATABASE CONFIG ──────────────────────────────────────────────────────────
-// NOTE: consider moving host/user/password/database into environment variables
-// (e.g. via dotenv) instead of hardcoding credentials in source control.
-// const pool = new Pool({
-//     host: process.env.DB_HOST || 'trading-db.cip64s8oy79k.us-east-1.rds.amazonaws.com',
-//     port: process.env.DB_PORT || 5432,
-//     user: process.env.DB_USER || 'postgres',
-//     password: process.env.DB_PASSWORD || 'QwerPoiu12',
-//     database: process.env.DB_NAME || 'trading',
-//     ssl: {
-//         rejectUnauthorized: false
-//     },
-//     // Give the pool enough connections for concurrent workers + headroom
-//     max: 10,
-// });
-
 // ─── DATE RANGE (inclusive) ───────────────────────────────────────────────────
 // const START_DATE = new Date(2026, 1, 1);   // 01 February 2026
 // const END_DATE   = new Date(2026, 5, 30);  // 30 June 2026
@@ -463,7 +447,6 @@ async function scrapeSymbolOnce(ctx, symbolEntry, log) {
                 let d = parseRowDate(row.dateText);
                 if (!d) d = tsToDate(row.ts);
 
-                console.log('isInRange: ', isInRange(d));
                 if (isInRange(d))    allRows.set(row.ts, row);
                 if (isBeforeRange(d)) { passedStart = true; break; }
             }

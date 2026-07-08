@@ -1,8 +1,6 @@
 const {
     socketQueue,
-    stockQueue,
-    analyticsQueue,
-    aiQueue,
+    stockUpdateQueue
 } = require('@trading/shared');
 
 async function publishStock(data) {
@@ -12,16 +10,18 @@ async function publishStock(data) {
         removeOnFail: true
     });
 
-    await stockQueue.add('stock-update', data, {
+    await stockUpdateQueue.add('stock-update', data, {
         removeOnComplete: true,
         removeOnFail: { count: 500 },
     });
 
-    // await analyticsQueue.add('analytics-job', data);
+}
 
-    // await aiQueue.add('ai-signal-job', data);
+async function publishRadar() {
+  await socketQueue.add('radar-update', {}, { removeOnComplete: true, removeOnFail: true });
 }
 
 module.exports = {
     publishStock,
+    publishRadar
 };

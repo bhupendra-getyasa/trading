@@ -9,11 +9,19 @@ const stockQueue = new Queue('stock-queue', {
     connection,
 });
 
+const scrapeQueue = new Queue('scrape-queue', {
+    connection,
+});
+
+const stockUpdateQueue = new Queue('stock-update-queue', {
+    connection,
+});
+
 const analyticsQueue = new Queue('analytics-queue', {
     connection,
 });
 
-const aiQueue = new Queue('ai-queue', {
+const liveQueue = new Queue('live-queue', {
     connection,
 });
 
@@ -21,26 +29,12 @@ const notificationQueue = new Queue('notification-queue', {
     connection,
 });
 
-const fibQueue = new Queue('fib-queue', {
-    connection,
-});
-
-const transformQueue = new Queue('signal-transform', {
-  connection: connection,
-  defaultJobOptions: {
-    attempts:    2,
-    backoff:     { type: 'exponential', delay: 5000 },
-    removeOnComplete: { count: 20 },   // keep last 20 completed jobs
-    removeOnFail:     { count: 10 },
-  },
-});
-
 module.exports = {
     socketQueue,
     stockQueue,
+    scrapeQueue,
+    stockUpdateQueue,
     analyticsQueue,
-    aiQueue,
-    notificationQueue,
-    fibQueue,
-    transformQueue
+    liveQueue,
+    notificationQueue
 };

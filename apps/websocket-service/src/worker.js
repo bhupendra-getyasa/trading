@@ -10,31 +10,9 @@ const {
   broadcastFibSignals,
   broadcastMostActive,
   broadcastWatchList,
-  broadcastWatchListToUser
+  broadcastWatchListToUser,
+  broadcastRadar, 
 } = require('./socket');
-
-// const worker = new Worker(
-//   'socket-queue',
-//   async (job) => {
-
-//     if (job.name === 'stock-update') {
-//       broadcast(job.data);
-//     } else if (job.name === 'top-performers') {
-//       top10Performers(job.data);
-//     } else if (job.name === 'send-sms') {
-//       // console.log('job: ', job.data);
-//       // await sendSMS(job.data.mobile, job.data.dialcode, job.data.otp);
-//     } else if (job.name === 'fib-signals') {
-//       broadcastFibSignals()
-//     } else if (job.name === 'watchlist') {
-//       broadcastWatchList()
-//     }
-//   },
-//   {
-//     connection,
-//     concurrency: 1,
-//   }
-// );
 
 const worker = new Worker(
   'socket-queue',
@@ -70,6 +48,9 @@ const worker = new Worker(
           job.data.userId,
           job.data.date
         );
+
+      case 'radar-update':
+        return broadcastRadar();
 
       default:
         throw new Error(`Unknown job type: ${job.name}`);

@@ -13,11 +13,9 @@
  */
 require('dotenv').config();
 const { pool } = require('@trading/shared');
-// const { createPool } = require('./db');
 const { runLiveScan } = require('./index');
 const CONFIG = require('./config');
 
-// const pool = createPool();
 const TZ = CONFIG.SESSION.tzOffsetHours;
 
 function inSession(now = new Date()) {

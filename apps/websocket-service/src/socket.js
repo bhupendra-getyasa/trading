@@ -3,6 +3,7 @@ const { pool, connection } = require('@trading/shared');
 
 const { loadFormulas }         = require('@trading/shared/src/formula-engine/loadFormulas.js');
 const { processTopPerformers } = require('@trading/shared/src/rankings/processTopPerformers.js');
+const { registerRadarHandlers, broadcastRadar } = require('./radar.socket');
 
 let io;
 
@@ -22,6 +23,8 @@ function init(server) {
 
   io.on('connection', async (socket) => {
     console.log('[socket] Client connected:', socket.id);
+
+    registerRadarHandlers(io, socket);
 
     // ── Send top performers ────────────────────────────────────────────────
     try {
@@ -365,5 +368,6 @@ module.exports = {
   broadcastMostActive,
   broadcastWatchList,
   broadcastWatchListToUser,
+  broadcastRadar: () => broadcastRadar(io),
   allowedOrigins,
 };

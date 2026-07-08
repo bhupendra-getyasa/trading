@@ -1,10 +1,13 @@
 const cron = require('node-cron');
-const { pool, connection, stockQueue } = require('@trading/shared');
+const { pool, connection, scrapeQueue } = require('@trading/shared');
 const { main, saveProgress } = require('./history/history-scrapper');
 const { runClassificationStep } = require('./live-engine/history/classificationStep');
 const { generateHistoryScore } = require('./history-engine');
 const { runTransform } = require('./history/transform');
-require('./worker');
+require('./scrapeWorker');
+require('./stockUpdateWorker');
+require('./analyticsWorker');
+require('./liveScanWorker');
 
 async function start() {
   console.log('✅ Ingestion service started');
@@ -15,7 +18,7 @@ async function start() {
     // '* * * * *',
     async () => {
       try {
-        const activeJobs = await stockQueue.getActiveCount();
+        const activeJobs = await scrapeQueue.getActiveCount();
 
         if (activeJobs > 0) {
           console.log(`[${new Date().toISOString()}] Previous scrape still running — skipping`);
@@ -24,7 +27,7 @@ async function start() {
 
         console.log(`[${new Date().toISOString()}] Scheduling scrape job`);
 
-        await stockQueue.add(
+        await scrapeQueue.add(
           'scrape-job',
           {},
           {

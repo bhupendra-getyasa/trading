@@ -127,7 +127,15 @@ async function scrapeStocks() {
         let previousCount = 0;
         let noChangeCount = 0;
 
+        const MAX_SCROLLS = 60;          // hard cap so the loop can never spin forever
+        const SCROLL_DEADLINE = Date.now() + 60000;
+        let scrolls = 0;
+
         while (true) {
+            if (scrolls++ >= MAX_SCROLLS || Date.now() > SCROLL_DEADLINE) {
+                console.warn(`⚠️ Scroll loop cap hit (${allStocks.size} stocks) — proceeding`);
+                break;
+            }
             const stocks = await page.evaluate(() => {
                 const rows = document.querySelectorAll('[data-qa-id="column-symbol"]');
                 return Array.from(rows).map((row) => {
