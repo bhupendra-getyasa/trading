@@ -5,16 +5,17 @@ require('dotenv').config();
 const { Worker } = require('bullmq');
 
 const { connection, pool, socketQueue } = require('@trading/shared');
+const { computeMostActive } = require('@trading/shared/src/rankings/mostActive.js');
 const { loadFormulas } = require('@trading/shared/src/formula-engine/loadFormulas.js');
 const { processTopPerformers } = require('@trading/shared/src/rankings/processTopPerformers.js');
 
 const { scrapeStocks } = require('./scraper');
 const { publishStock } = require('./publisher');
 const { processBatch } = require('./fib/fibProcessor');
-const { computeMostActive } = require('@trading/shared/src/rankings/mostActive.js');
+const { runLiveScan } = require('./live-engine');
 
 let count = 0;
-let stockts = [];
+let stocks = [];
 
 
 const worker = new Worker(
@@ -30,8 +31,8 @@ const worker = new Worker(
       //   WITH scrape_times AS (
       //     SELECT DISTINCT created_at
       //     FROM public.market_stock_snapshots
-      //     WHERE created_at >= date_trunc('day', NOW() - INTERVAL '4 day') + INTERVAL '6 hour'
-      //       AND created_at <  date_trunc('day', NOW() - INTERVAL '4 day') + INTERVAL '10 hour'
+      //     WHERE created_at >= date_trunc('day', NOW() - INTERVAL '1 day') + INTERVAL '6 hour'
+      //       AND created_at <  date_trunc('day', NOW() - INTERVAL '1 day') + INTERVAL '10 hour'
       //     ORDER BY created_at
       //     OFFSET $1 LIMIT 1
       //   )
@@ -103,6 +104,7 @@ const worker = new Worker(
         // ── 3. Trigger socket events ──────────────────────────────────────
         await socketQueue.add('watchlist', {}, { removeOnComplete: true, removeOnFail: true });
         await socketQueue.add('fib-signals', {}, { removeOnComplete: true, removeOnFail: true });
+        try { await runLiveScan(pool); } catch (e) { console.error('[live]', e.message); }
 
         // ── 4. Fetch intraday rows for today ──────────────────────────────
         const { rows: todayIntradayRows } = await pool.query(`

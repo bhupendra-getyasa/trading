@@ -31,7 +31,7 @@ services:
 
     working_dir: /app/apps/ingestion-service
 
-    command: sh -c "npm install && npx nodemon src/index.js --legacy-watch"
+    command: npx nodemon --config ../../nodemon.json  src/index.js --legacy-watch
 
     depends_on:
       - redis
@@ -56,7 +56,7 @@ services:
 
     working_dir: /app/apps/websocket-service
 
-    command: sh -c "npm install && npx nodemon src/index.js --legacy-watch"
+    command: npx nodemon --config ../../nodemon.json  src/index.js --legacy-watch
 
     depends_on:
       - redis

@@ -11,6 +11,7 @@
   "description": "",
   "dependencies": {
     "@trading/shared": "^1.0.0",
+    "luxon": "^3.7.2",
     "node-cron": "^4.2.1",
     "playwright": "^1.61.0"
   }

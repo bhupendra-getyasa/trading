@@ -1,11 +1,13 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
-const { Pool } = require('pg');
+// const { Pool } = require('pg');
+const { DateTime } = require("luxon");
+const { pool } = require('@trading/shared');
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
-const COOKIES_PATH = path.resolve(__dirname, 'tradingview-cookies.json');
-const SYMBOLS_PATH = path.resolve(__dirname, 'symbols.json');
+const COOKIES_PATH = path.resolve(__dirname, '..', 'tradingview-cookies.json');
+const SYMBOLS_PATH = path.resolve(__dirname, '..', 'symbols.json');
 // const PROGRESS_PATH = path.resolve(__dirname, 'scrape-progress.json');
 // const FAILED_PATH   = path.resolve(__dirname, 'failed-symbols.json');
 
@@ -19,24 +21,38 @@ const PROGRESS_PATH = path.join(TMP_DIR, 'scrape-progress.json');
 const FAILED_PATH   = path.resolve(TMP_DIR, 'failed-symbols.json');
 
 // ─── DATABASE CONFIG ──────────────────────────────────────────────────────────
-const pool = new Pool({
-    host: 'trading-db.cip64s8oy79k.us-east-1.rds.amazonaws.com',
-    port: 5432,
-    user: 'postgres',
-    password: 'QwerPoiu12',
-    database: 'trading',
-    ssl: {
-        rejectUnauthorized: false
-    }
-});
+// NOTE: consider moving host/user/password/database into environment variables
+// (e.g. via dotenv) instead of hardcoding credentials in source control.
+// const pool = new Pool({
+//     host: process.env.DB_HOST || 'trading-db.cip64s8oy79k.us-east-1.rds.amazonaws.com',
+//     port: process.env.DB_PORT || 5432,
+//     user: process.env.DB_USER || 'postgres',
+//     password: process.env.DB_PASSWORD || 'QwerPoiu12',
+//     database: process.env.DB_NAME || 'trading',
+//     ssl: {
+//         rejectUnauthorized: false
+//     },
+//     // Give the pool enough connections for concurrent workers + headroom
+//     max: 10,
+// });
 
 // ─── DATE RANGE (inclusive) ───────────────────────────────────────────────────
-const START_DATE = new Date(2026, 1, 1);   // 01 February 2026
-const END_DATE   = new Date(2026, 5, 30);  // 30 June 2026
+// const START_DATE = new Date(2026, 1, 1);   // 01 February 2026
+// const END_DATE   = new Date(2026, 5, 30);  // 30 June 2026
+
+const START_DATE = DateTime.now()
+  .startOf("day")
+  .toJSDate();
+
+const END_DATE = START_DATE;  
 
 const MAX_RETRIES    = 5;
 const RETRY_DELAY_MS = 8000;
 const MAX_SCROLLS    = 2000;
+
+// ─── CONCURRENCY ──────────────────────────────────────────────────────────────
+// How many symbols to scrape in parallel. Override with: CONCURRENT_SYMBOLS=3 node scrape-concurrent.js
+const CONCURRENT_SYMBOLS = parseInt(process.env.CONCURRENT_SYMBOLS || '2', 10);
 
 // ─── PROGRESS TRACKER ────────────────────────────────────────────────────────
 function loadProgress() {
@@ -67,8 +83,11 @@ function tsToDate(ts) { return new Date(ts * 1000); }
 
 function isInRange(d) {
     if (!d) return false;
-    const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-    return day >= START_DATE && day <= END_DATE;
+    // const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    // return day >= START_DATE && day <= END_DATE;
+
+    const day = new Date(d.getFullYear(), d.getMonth(), d.getDate()); // today 00:00
+    return day >= START_DATE && day <= END_DATE;   
 }
 
 function isBeforeRange(d) {
@@ -444,6 +463,7 @@ async function scrapeSymbolOnce(ctx, symbolEntry, log) {
                 let d = parseRowDate(row.dateText);
                 if (!d) d = tsToDate(row.ts);
 
+                console.log('isInRange: ', isInRange(d));
                 if (isInRange(d))    allRows.set(row.ts, row);
                 if (isBeforeRange(d)) { passedStart = true; break; }
             }
@@ -584,13 +604,14 @@ async function main() {
     const remaining = symbols.filter(s => !progress.completed.includes(s.symbol));
 
     console.log('═'.repeat(55));
-    console.log('  KSE Stock Scraper — Sequential Mode');
+    console.log('  KSE Stock Scraper — Concurrent Mode');
     console.log('═'.repeat(55));
     console.log(`  Total symbols    : ${symbols.length}`);
     console.log(`  Already done     : ${progress.completed.length}`);
     console.log(`  To scrape now    : ${remaining.length}`);
     console.log(`  Date range       : ${START_DATE.toDateString()} → ${END_DATE.toDateString()}`);
     console.log(`  Retries/symbol   : ${MAX_RETRIES}`);
+    console.log(`  Concurrency      : ${CONCURRENT_SYMBOLS} symbols at a time`);
     console.log('═'.repeat(55) + '\n');
 
     if (remaining.length === 0) {
@@ -608,6 +629,8 @@ async function main() {
     }
 
     // ── Single shared browser context (one set of cookies, one session) ───────
+    // Multiple pages can be opened concurrently on this same context — that's
+    // exactly what our workers below do.
     const browser = await chromium.launch({
         headless: true,
         args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu'],
@@ -618,24 +641,41 @@ async function main() {
     });
     await ctx.addCookies(cookies);
 
-    // ── Sequential scrape ─────────────────────────────────────────────────────
-    const stats    = { success: 0, skipped: 0, failed: 0 };
-    const startTime = Date.now();
+    // ── Concurrent scrape (N workers pulling from a shared queue) ─────────────
+    const stats     = { success: 0, skipped: 0, failed: 0 };
+    const startTime  = Date.now();
+    let cursor       = 0; // shared index into `remaining`; each worker claims the next one
 
-    for (let i = 0; i < remaining.length; i++) {
-        const symbolEntry  = remaining[i];
-        const globalIndex  = progress.completed.length + i + 1;
+    async function worker(workerId) {
+        // Stagger worker starts slightly so we don't fire N simultaneous
+        // page.goto() calls in the same instant.
+        await new Promise(r => setTimeout(r, workerId * 1500));
 
-        console.log('\n' + '─'.repeat(55));
-        const result = await processSymbol(ctx, symbolEntry, globalIndex, symbols.length, progress);
-        stats[result === 'success' ? 'success' : result === 'skipped' ? 'skipped' : 'failed']++;
+        while (true) {
+            const i = cursor++;
+            if (i >= remaining.length) break; // queue drained, this worker is done
 
-        // Brief pause between symbols to avoid hammering TradingView
-        if (i < remaining.length - 1) {
-            console.log(`[${symbolEntry.symbol}] Pausing 3s before next symbol...`);
-            await new Promise(r => setTimeout(r, 3000));
+            const symbolEntry = remaining[i];
+            const globalIndex  = progress.completed.length + i + 1;
+
+            console.log(`\n${'─'.repeat(55)}\n[worker ${workerId}]`);
+            const result = await processSymbol(ctx, symbolEntry, globalIndex, symbols.length, progress);
+            stats[result === 'success' ? 'success' : result === 'skipped' ? 'skipped' : 'failed']++;
+
+            // Brief pause before this worker grabs its next symbol, to avoid
+            // hammering TradingView even with multiple lanes running.
+            if (cursor < remaining.length) {
+                console.log(`[worker ${workerId}] Pausing 3s before next symbol...`);
+                await new Promise(r => setTimeout(r, 3000));
+            }
         }
     }
+
+    // Launch CONCURRENT_SYMBOLS workers; each keeps pulling symbols until the
+    // shared queue (`remaining`) is drained.
+    await Promise.all(
+        Array.from({ length: Math.min(CONCURRENT_SYMBOLS, remaining.length) }, (_, idx) => worker(idx + 1))
+    );
 
     // ── Shutdown ──────────────────────────────────────────────────────────────
     await ctx.close().catch(() => {});

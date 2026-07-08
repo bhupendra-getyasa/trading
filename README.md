@@ -27,6 +27,8 @@ trading
     │    ├── .env
     │    ├── Dockerfile
     │    ├── package.json
+    │    ├── tmp
+         |    └── scrape-progress.js
     │    └── src/
     │       ├── scraper.js
     │       ├── publisher.js

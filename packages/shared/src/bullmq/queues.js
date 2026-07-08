@@ -25,11 +25,22 @@ const fibQueue = new Queue('fib-queue', {
     connection,
 });
 
+const transformQueue = new Queue('signal-transform', {
+  connection: connection,
+  defaultJobOptions: {
+    attempts:    2,
+    backoff:     { type: 'exponential', delay: 5000 },
+    removeOnComplete: { count: 20 },   // keep last 20 completed jobs
+    removeOnFail:     { count: 10 },
+  },
+});
+
 module.exports = {
     socketQueue,
     stockQueue,
     analyticsQueue,
     aiQueue,
     notificationQueue,
-    fibQueue
+    fibQueue,
+    transformQueue
 };

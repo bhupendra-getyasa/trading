@@ -10,13 +10,11 @@
     "dev:stop": "docker compose -f docker-compose.dev.yml stop",
     "dev:rebuild": "docker compose -f docker-compose.dev.yml up --build -d",
     "dev:reset": "docker compose -f docker-compose.dev.yml down -v && docker compose -f docker-compose.dev.yml up --build",
-
     "prod": "docker compose up --build -d",
     "prod:down": "docker compose down",
-
     "ingestion:dev": "nodemon apps/ingestion-service/src/index.js",
     "websocket:dev": "nodemon apps/websocket-service/src/index.js",
-
+    "signal:dev": "nodemon apps/signal-engine/src/index.js",
     "logs": "docker compose -f docker-compose.dev.yml logs -f"
   },
   "workspaces": [

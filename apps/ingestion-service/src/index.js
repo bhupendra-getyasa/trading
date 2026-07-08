@@ -1,6 +1,9 @@
 const cron = require('node-cron');
-const { connection, stockQueue } = require('@trading/shared');
-const { main } = require('./scrape-table-data')
+const { pool, connection, stockQueue } = require('@trading/shared');
+const { main, saveProgress } = require('./history/history-scrapper');
+const { runClassificationStep } = require('./live-engine/history/classificationStep');
+const { generateHistoryScore } = require('./history-engine');
+const { runTransform } = require('./history/transform');
 require('./worker');
 
 async function start() {
@@ -36,13 +39,40 @@ async function start() {
     { timezone: 'Asia/Kuwait' }
   );
 
-  // ─── Daily at 5:30 PM: scrape data ─────────────────────────────────────────
+  // ─── Daily at 8:30 PM: history score ─────────────────────────────────────────
   cron.schedule(
-    '55 17 * * *',
+    '30 08 * * 0-4',
+    // '40 17 * * 0-4',
+    async () => {
+      try {
+        console.log(`[${new Date().toISOString()}] Generating history score...`);
+        // await generateHistoryScore();
+        await runClassificationStep(pool);  
+        console.log(`[${new Date().toISOString()}] Generated history score`);
+      } catch (err) {
+        console.error(`[${new Date().toISOString()}] History score failed:`, err.message);
+      }
+    },
+    { timezone: 'Asia/Kuwait' }
+  );
+
+  // ─── Daily at 02:00 PM: scrape data ─────────────────────────────────────────
+  cron.schedule(
+    '00 14 * * *',
     async () => {
       try {
         console.log(`[${new Date().toISOString()}] Data scrapping...`);
-        await main()
+        await saveProgress({ completed: [], failed: [] })
+        await main();
+
+        const date = new Date().toISOString().split("T")[0];
+
+        const opts = {
+          dateFrom: date,
+          dateTo:   date
+        };
+
+        await runTransform(opts);
         console.log(`[${new Date().toISOString()}] Data scrapped`);
       } catch (err) {
         console.error(`[${new Date().toISOString()}] Data scrap failed:`, err.message);
