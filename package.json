@@ -14,7 +14,6 @@
     "prod:down": "docker compose down",
     "ingestion:dev": "nodemon apps/ingestion-service/src/index.js",
     "websocket:dev": "nodemon apps/websocket-service/src/index.js",
-    "signal:dev": "nodemon apps/signal-engine/src/index.js",
     "logs": "docker compose -f docker-compose.dev.yml logs -f"
   },
   "workspaces": [

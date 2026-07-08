@@ -1,6 +1,3 @@
-// =============================================================================
-// apps/signal-engine/src/writer.js
-//
 // BUG FIXED: Previous writer.js was an exact copy of loader.js.
 // It had fetchSymbols/fetchRawRows — zero INSERT logic.
 // This is the correct writer with real upsert into stock_prices_daily.

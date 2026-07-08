@@ -6,7 +6,6 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/ingestion-service/package.json apps/ingestion-service/
 COPY apps/websocket-service/package.json apps/websocket-service/
-COPY apps/signal-engine/package.json apps/signal-engine/
 COPY packages/shared/package.json packages/shared/
 
 # install ALL workspace deps
