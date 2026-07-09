@@ -31,7 +31,45 @@ function parseSnapshot(r) {
     changePct: parseNum(r.change_percent),
     volume: parseVolume(r.volume),
     avgVolume: parseVolume(r.avg_volume),
-    ts: r.created_at ? Date.parse(r.created_at) : null,
+    ts: toMs(r.created_at),
   };
 }
-module.exports = { isNum, round1, round2, round3, ratio, clamp, parseNum, parseVolume, tradingDay, parseSnapshot };
+// FIX: how much of the trading session has elapsed at ts (0..1).
+// rvol must compare todays PARTIAL volume against the pro-rated average,
+// not the FULL-day average - otherwise every stock looks thin in the morning.
+// robust timestamp -> ms. Handles Date objects (pg), numbers, and
+// postgres-ish strings like "2026-07-09 06:10:20.968+00" (offset without colon).
+function toMs(v) {
+  if (v == null) return null;
+  if (v instanceof Date) return v.getTime();
+  if (typeof v === "number") return v;
+  let ms = Date.parse(v);
+  if (!isNaN(ms)) return ms;
+  const fixed = String(v).replace(" ", "T").replace(/([+-]\d{2})$/, "$1:00");
+  ms = Date.parse(fixed);
+  return isNaN(ms) ? null : ms;
+}
+
+function sessionElapsedMin(ts, session) {
+  const startMin = ((session?.openHour ?? 9) - (session?.tzOffsetHours ?? 3)) * 60;
+  const ms = toMs(ts);
+  if (ms == null) return null;
+  const d = new Date(ms);
+  return (d.getUTCHours() * 60 + d.getUTCMinutes()) - startMin;
+}
+
+function sessionFraction(ts, session) {
+  const startMin = ((session?.openHour ?? 9) - (session?.tzOffsetHours ?? 3)) * 60;
+  const totalMin = (((session?.closeHour ?? 13) - (session?.openHour ?? 9)) * 60) || 240;
+  const ms = toMs(ts);
+  if (ms == null) return 1;
+  const d = new Date(ms);
+  const elapsed = (d.getUTCHours() * 60 + d.getUTCMinutes()) - startMin;
+  const frac = elapsed / totalMin;
+  if (!isFinite(frac)) return 1;
+  // floor at 3 minutes only (was 0.08 = ~19min, which badly understated early rvol)
+  return Math.min(1, Math.max(3 / totalMin, frac));
+}
+
+module.exports = {
+  sessionFraction, sessionElapsedMin, toMs, isNum, round1, round2, round3, ratio, clamp, parseNum, parseVolume, tradingDay, parseSnapshot };

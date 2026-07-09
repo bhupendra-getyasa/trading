@@ -27,7 +27,9 @@ function commissionFilsPerShare(shares, price, cfg) {
 function suggest({ profile, price, volume, avgVolume, tradableSwings, targetFils, lane }, budgetKd, sizingCfg, commissionCfg) {
   const risk = sizingCfg.riskPctByProfile[profile] ?? 0.05;
   const est_roundtrips = Math.max(1, Math.round(tradableSwings ?? 1));   // estimation only (revolving = TMI's job)
-  const sharesByBudget = budgetKd != null ? (budgetKd * risk * 1000) / price : Infinity; // risk% cap
+  // FIX: a missing budget must never delete the risk cap (that silently sized to the exit cap)
+  const effBudgetKd = (budgetKd != null && budgetKd > 0) ? budgetKd : (sizingCfg.defaultBudgetKd ?? null);
+  const sharesByBudget = effBudgetKd != null ? (effBudgetKd * risk * 1000) / price : Infinity; // risk% cap
   const volForCap = (avgVolume && avgVolume > 0) ? avgVolume : volume;                    // exit safety on TYPICAL daily volume, not intraday-so-far
   const sharesByVolume = sizingCfg.volumeCapPct * volForCap;
 
@@ -61,7 +63,7 @@ function suggest({ profile, price, volume, avgVolume, tradableSwings, targetFils
     else tag = 'OVER-BUDGET';
   }
   const kdNeeded = U.round1((shownShares * price) / 1000);
-  if (tag === 'TRADABLE' && budgetKd != null && kdNeeded > budgetKd) tag = 'OVER-BUDGET';
+  if (tag === 'TRADABLE' && effBudgetKd != null && kdNeeded > effBudgetKd) tag = 'OVER-BUDGET';
 
   return { suggested_shares: shownShares, est_roundtrips, kd_needed: kdNeeded,
     commission_fils_per_share: commPerShare, tag };

@@ -14,6 +14,21 @@
  *          public.opportunity_list (status), public.scanner_state (processed)
  */
 const { pool } = require('@trading/shared');
+// FIX: reuse the ENGINE's sizing so rejected cards can show the same numbers
+// (importing rather than re-implementing avoids formula drift)
+const { suggest } = require('../../../ingestion-service/src/live-engine/sizing');
+const ENGINE_CFG = require('../../../ingestion-service/src/live-engine/config');
+
+// FIX: fraction of the 09:00-13:00 Kuwait session elapsed (0.08..1).
+// rvol must compare todays PARTIAL volume to the pro-rated average.
+function sessionFraction(d) {
+  const startMin = 6 * 60;   // 09:00 Kuwait = 06:00 UTC
+  const totalMin = 240;      // 4-hour session
+  const elapsed = (d.getUTCHours() * 60 + d.getUTCMinutes()) - startMin;
+  const frac = elapsed / totalMin;
+  if (!isFinite(frac)) return 1;
+  return Math.min(1, Math.max(0.08, frac));
+}
 
 const ENGINE_VERSION = 'live-engine v1.0';
 const TZ = 'Asia/Kuwait';
@@ -45,7 +60,7 @@ function parseVol(v) {
 
 // engine size_tag -> the UI's tag set (ILLIQUID-CAP / ILLIQUID-TINY -> ILLIQUID)
 function normTag(t) {
-  if (!t) return 'TRADABLE';
+  if (!t) return null;            // FIX: no tag != TRADABLE (rejected cards were showing a green TRADABLE badge)
   const u = String(t).toUpperCase();
   return u.startsWith('ILLIQUID') ? 'ILLIQUID' : u;
 }
@@ -135,21 +150,28 @@ async function getOpportunities(date) {
   return rows.map(mapOpportunity);
 }
 
-async function getRejected(date) {
-  // radar hit but History said no (mirrors repository.getRejectedList) + live rvol
+async function getRejected(date, budgetKd) {
+  // radar hit but History said no. We now enrich each row with the SAME fields a
+  // tradable card shows (open, exp, comm, net/sh, shares, ~trips, budget, /trip, day)
+  // so the trader can see exactly what is being passed up. BUY stays disabled.
   const { rows } = await pool.query(
     `SELECT symbol, profile, trend, lane,
-            max(swing1_fils) AS swing1_fils, max(entry_price) AS entry_price,
-            max(reject_reason) AS reject_reason,
-            max(run_ts) AS last_hit, count(*)::int AS hits_today
-     FROM public.radar_events
-     WHERE trading_day = $1 AND history_qualifies = false
-     GROUP BY symbol, profile, trend, lane
-     ORDER BY max(swing1_fils) DESC NULLS LAST;`, [date]);
+            swing1_fils, entry_price, reject_reason, last_hit, hits_today
+     FROM (
+       SELECT DISTINCT ON (symbol) symbol, profile, trend, lane,
+              swing1_fils, entry_price, reject_reason,
+              run_ts AS last_hit,
+              count(*) OVER (PARTITION BY symbol)::int AS hits_today
+       FROM public.radar_events
+       WHERE trading_day = $1 AND history_qualifies = false
+       ORDER BY symbol, run_ts DESC
+     ) t
+     ORDER BY swing1_fils DESC NULLS LAST;`, [date]);
   if (!rows.length) return [];
 
-  // pull latest snapshot per rejected symbol to compute rvol + waking
   const symbols = rows.map((r) => r.symbol);
+
+  // latest snapshot per symbol -> volume / avg_volume
   const { rows: snaps } = await pool.query(
     `SELECT DISTINCT ON (symbol) symbol, volume, avg_volume
      FROM public.market_stock_snapshots
@@ -157,12 +179,49 @@ async function getRejected(date) {
      ORDER BY symbol, created_at DESC;`, [symbols]);
   const snapMap = new Map(snaps.map((s) => [s.symbol, s]));
 
+  // FIRST snapshot of the trading day -> OPEN price
+  const { rows: opens } = await pool.query(
+    `SELECT DISTINCT ON (symbol) symbol, last_price
+     FROM public.market_stock_snapshots
+     WHERE symbol = ANY($1) AND created_at::date = $2
+     ORDER BY symbol, created_at ASC;`, [symbols, date]);
+  const openMap = new Map(opens.map((o) => [o.symbol, parsePrice(o.last_price)]));
+
+  // history classification -> expected fils + tradable swings
+  const { rows: cls } = await pool.query(
+    `SELECT symbol, target_fils, tradable_swings
+     FROM public.stock_classification
+     WHERE symbol = ANY($1);`, [symbols]);
+  const clsMap = new Map(cls.map((c) => [c.symbol, c]));
+
+  const budget = Number(budgetKd) || ENGINE_CFG.SIZING.defaultBudgetKd || 2000;
+
   return rows.map((r) => {
     const s = snapMap.get(r.symbol) || {};
     const vol = parseVol(s.volume);
     const avg = parseVol(s.avg_volume);
-    const rvol = avg && avg > 0 && vol != null ? vol / avg : null;
+    const frac = sessionFraction(new Date());
+    const rvol = avg && avg > 0 && vol != null ? vol / (avg * frac) : null;
     const waking = rvol != null && rvol >= WAKING_RVOL;
+
+    const c = clsMap.get(r.symbol) || {};
+    const expected = c.target_fils != null ? Number(c.target_fils) : null;
+    const price = n(r.entry_price);
+
+    // size it exactly as the engine would (WILD / Lane B get the tiny cap)
+    let size = null, net_fils = null, est_profit_kd = null, per_trip_kd = null, day_kd = null;
+    if (price && avg && expected != null) {
+      size = suggest({
+        profile: r.profile, price, volume: vol ?? avg, avgVolume: avg,
+        tradableSwings: Number(c.tradable_swings) || 1,
+        targetFils: expected, lane: r.lane,
+      }, budget, ENGINE_CFG.SIZING, ENGINE_CFG.COMMISSION);
+      net_fils = Math.round((expected - size.commission_fils_per_share) * 100) / 100;
+      per_trip_kd = Math.round((net_fils * size.suggested_shares) / 1000 * 100) / 100;
+      est_profit_kd = per_trip_kd;
+      day_kd = Math.round(per_trip_kd * size.est_roundtrips * 10) / 10;
+    }
+
     return {
       id: `rej-${r.symbol}`,
       symbol: r.symbol,
@@ -170,15 +229,28 @@ async function getRejected(date) {
       trend: r.trend || 'STABLE',
       lane: r.lane,
       swing1_fils: n(r.swing1_fils),
-      entry: n(r.entry_price),
+      entry: price,
+      open: openMap.get(r.symbol) ?? null,
+      expected_fils: expected,
+      commission_fils: size ? size.commission_fils_per_share : null,
+      net_fils,
+      suggested_shares: size ? size.suggested_shares : null,
+      est_roundtrips: size ? size.est_roundtrips : null,
+      kd_needed: size ? size.kd_needed : null,
+      est_profit_kd,
+      day_kd,
+      would_be_tag: size ? size.tag : null,   // what the size WOULD be, if history allowed it
       reject_reason: r.reject_reason || 'history rejected',
       volume: vol, avg_volume: avg, rvol,
       warnings: waking ? ['WAKING'] : [],
       waking,
+      hits_today: r.hits_today,
+      size_tag: 'REJECTED',   // badge stays red; BUY stays disabled
       status: 'SKIPPED',
     };
   });
 }
+
 
 function buildConsole(list, budget, deployed) {
   const take = list.filter((o) => o.allocation === 'TAKE');
@@ -201,7 +273,7 @@ function buildConsole(list, budget, deployed) {
 /** Full snapshot the front-end renders. If budget is undefined, use the day's saved budget. */
 async function getRadarSnapshot(date, budget) {
   const b = budget === undefined || budget === null ? await getBudget(date) : Number(budget);
-  const [opps, rejected] = await Promise.all([getOpportunities(date), getRejected(date)]);
+  const [opps, rejected] = await Promise.all([getOpportunities(date), getRejected(date, b)]);
   const { deployed, list } = allocateBudget(opps, b);
   return { date, opportunities: list, rejected, console: buildConsole(list, b, deployed) };
 }

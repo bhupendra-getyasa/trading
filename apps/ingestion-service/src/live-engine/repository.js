@@ -107,8 +107,15 @@ async function loadClassifications(db) {
   } catch { return new Map(); }   // classification table not built yet -> Live still runs, just no Gate-2 pass
 }
 async function loadBudget(db, tradingDay) {
-  try { const { rows } = await db.query(`SELECT budget_kd FROM ${T.session} WHERE trading_day = $1;`, [tradingDay]); return rows[0] ? Number(rows[0].budget_kd) : null; }
-  catch { return null; }
+  try {
+    const { rows } = await db.query(`SELECT budget_kd FROM ${T.session} WHERE trading_day = $1;`, [tradingDay]);
+    if (rows[0]) return Number(rows[0].budget_kd);
+    console.warn(`[live] no budget row in session_settings for ${tradingDay} - sizing falls back to CONFIG.SIZING.defaultBudgetKd`);
+    return null;
+  } catch (e) {
+    console.warn(`[live] loadBudget failed (${e.message}) - falling back to CONFIG.SIZING.defaultBudgetKd`);
+    return null;
+  }
 }
 async function loadProcessedToday(db, tradingDay) {
   await ensureTables(db);

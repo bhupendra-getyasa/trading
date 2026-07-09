@@ -2,8 +2,13 @@
 /* signals.js — per-stock live signal panel from the snapshot window (absolute).
  * Logged every cycle for tuning. Add a signal here and it flows through. */
 const U = require('./lib/util');
+const CONFIG = require('./config');
 const REG = {
-  rvol:        (w) => { const l = w[w.length - 1]; return U.round2(U.ratio(l.volume, l.avgVolume)); },
+  // FIX: pro-rate the average by elapsed session time (partial day vs full-day avg)
+  rvol: (w) => { const l = w[w.length - 1];
+    if (!U.isNum(l.volume) || !U.isNum(l.avgVolume) || !l.avgVolume) return null;
+    const expected = l.avgVolume * U.sessionFraction(l.ts, CONFIG.SESSION);
+    return expected > 0 ? U.round2(l.volume / expected) : null; },
   changePct:   (w) => U.round2((w[w.length - 1] || {}).changePct),
   velocity:    (w) => { const p = w.map(r => r.price).filter(U.isNum); const n = p.length; return n >= 2 ? U.round3(((p[n-1]-p[n-2]) / p[n-2]) * 100) : null; },
   acceleration:(w) => { const p = w.map(r => r.price).filter(U.isNum); const n = p.length; if (n<3) return null; const v1=(p[n-1]-p[n-2])/p[n-2]*100, v0=(p[n-2]-p[n-3])/p[n-3]*100; return U.round3(v1-v0); },

@@ -52,6 +52,7 @@ module.exports = {
   // ---- Sizing SUGGESTION (never restricts the radar) ------------------------
   SIZING: {
     riskPctByProfile: { SWING: 0.25, RUNNER: 0.15, WATCH: 0.15, WILD: 0.05, MARGINAL: 0.05, DEAD: 0 },
+    defaultBudgetKd: 2000,             // FIX: never let a null budget remove the risk cap
     volumeCapPct: 0.005,               // never own > 0.5% of daily volume (exit safety)
     lotSize: 1000,                     // round to this; keeps commission at the floor
     minLot: 500,
