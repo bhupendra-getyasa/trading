@@ -1,7 +1,7 @@
 const cron = require('node-cron');
 const { pool, connection, scrapeQueue } = require('@trading/shared');
 const { main, saveProgress } = require('./history/history-scrapper');
-const { runClassificationStep } = require('./live-engine/history/classificationStep');
+const { runClassificationStep } = require('@trading/shared/src/live-engine/history/classificationStep');
 const { generateHistoryScore } = require('./history-engine');
 const { runTransform } = require('./history/transform');
 require('./scrapeWorker');

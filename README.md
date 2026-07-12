@@ -40,6 +40,8 @@ trading
         ├── .env
         ├── index.js
         ├── package.json
+        ├── services
+        |    └── radar.service.js
         └── src/
             ├── index.js
             └── worker.js

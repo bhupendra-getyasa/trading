@@ -3,7 +3,7 @@ require('dotenv').config();
 const { Worker } = require('bullmq');
 
 const { connection, pool } = require('@trading/shared');
-const { runLiveScan } = require('./live-engine');
+const { runLiveScan } = require('@trading/shared/src/live-engine');
 
 /**
  * LIVE RADAR WORKER — runs the Gate-1/Gate-2 scanner every minute.

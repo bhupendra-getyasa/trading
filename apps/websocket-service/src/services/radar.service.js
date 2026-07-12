@@ -16,8 +16,8 @@
 const { pool } = require('@trading/shared');
 // FIX: reuse the ENGINE's sizing so rejected cards can show the same numbers
 // (importing rather than re-implementing avoids formula drift)
-const { suggest } = require('../../../ingestion-service/src/live-engine/sizing');
-const ENGINE_CFG = require('../../../ingestion-service/src/live-engine/config');
+const { suggest } = require('@trading/shared/src/live-engine/sizing');
+const ENGINE_CFG = require('@trading/shared/src/live-engine/config');
 
 // FIX: fraction of the 09:00-13:00 Kuwait session elapsed (0.08..1).
 // rvol must compare todays PARTIAL volume to the pro-rated average.
