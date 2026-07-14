@@ -17,6 +17,10 @@ const stockUpdateQueue = new Queue('stock-update-queue', {
     connection,
 });
 
+const watchlistQueue = new Queue('watchlist', {
+    connection,
+});
+
 const analyticsQueue = new Queue('analytics-queue', {
     connection,
 });
@@ -34,6 +38,7 @@ module.exports = {
     stockQueue,
     scrapeQueue,
     stockUpdateQueue,
+    watchlistQueue,
     analyticsQueue,
     liveQueue,
     notificationQueue

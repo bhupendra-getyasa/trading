@@ -1,13 +1,16 @@
 const cron = require('node-cron');
-const { pool, connection, scrapeQueue } = require('@trading/shared');
+const { pool, connection, scrapeQueue, watchlistQueue } = require('@trading/shared');
 const { main, saveProgress } = require('./history/history-scrapper');
 const { runClassificationStep } = require('@trading/shared/src/live-engine/history/classificationStep');
 const { generateHistoryScore } = require('./history-engine');
 const { runTransform } = require('./history/transform');
+const { closeScraper } = require('./watchlistScraper');
+
 require('./scrapeWorker');
 require('./stockUpdateWorker');
 require('./analyticsWorker');
 require('./liveScanWorker');
+require('./watchlistWorker');
 
 async function start() {
   console.log('✅ Ingestion service started');
@@ -42,6 +45,38 @@ async function start() {
     { timezone: 'Asia/Kuwait' }
   );
 
+  // ─── Every minute (Sun–Thu, 09:00–12:59 Kuwait): queue a watchlist scrape ────
+  cron.schedule(
+    '*/1 9-12 * * 0-4',
+    // '* * * * *',
+    async () => {
+      try {
+        // Overrun guard: never queue on top of a scan that's still running/waiting.
+        const [active, waiting] = await Promise.all([
+          watchlistQueue.getActiveCount(),
+          watchlistQueue.getWaitingCount(),
+        ]);
+        if (active > 0 || waiting > 0) {
+          console.log(`[${new Date().toISOString()}] Watchlist scrape still pending (active=${active}, waiting=${waiting}) — skipping`);
+          return;
+        }
+ 
+        await watchlistQueue.add(
+          'watchlist-job',
+          {},
+          {
+            removeOnComplete: true,
+            removeOnFail: true,
+            attempts: 1
+          }
+        );
+      } catch (err) {
+        console.error(`[${new Date().toISOString()}] Failed to schedule watchlist scrape:`, err.message);
+      }
+    },
+    { timezone: 'Asia/Kuwait' }
+  );
+
   // ─── Daily at 8:30 PM: history score ─────────────────────────────────────────
   cron.schedule(
     '30 08 * * 0-4',
@@ -61,12 +96,26 @@ async function start() {
 
   // ─── Daily at 02:00 PM: scrape data ─────────────────────────────────────────
   cron.schedule(
-    '00 14 * * *',
+    '00 14 * * 0-4',
     async () => {
       try {
         console.log(`[${new Date().toISOString()}] Data scrapping...`);
         await saveProgress({ completed: [], failed: [] })
         await main();
+        console.log(`[${new Date().toISOString()}] Data scrapped`);
+      } catch (err) {
+        console.error(`[${new Date().toISOString()}] Data scrap failed:`, err.message);
+      }
+    },
+    { timezone: 'Asia/Kuwait' }
+  );
+
+  // ─── Daily at 05:00 PM: create data ─────────────────────────────────────────
+  cron.schedule(
+    '00 17 * * 0-4',
+    async () => {
+      try {
+        console.log(`[${new Date().toISOString()}] Data scrapping...`);
 
         const date = new Date().toISOString().split("T")[0];
 
@@ -99,5 +148,14 @@ async function start() {
     { timezone: 'Asia/Kuwait' }
   );
 }
+
+// ─── Graceful shutdown: close the persistent browser ─────────────────────────
+async function shutdown(sig) {
+  console.log(`\n${sig} — shutting down...`);
+  try { await closeScraper(); } catch {}
+  process.exit(0);
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 start();

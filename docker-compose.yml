@@ -19,7 +19,7 @@ services:
       dockerfile: apps/ingestion-service/Dockerfile
 
     container_name: ingestion-service
-    mem_limit: 700m
+    mem_limit: 2g
 
     ports:
       - "4001:4001"
