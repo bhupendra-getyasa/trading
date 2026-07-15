@@ -595,7 +595,7 @@ async function main() {
 
     if (remaining.length === 0) {
         console.log('All symbols already completed! Delete scrape-progress.json to re-run from scratch.');
-        await pool.end();
+        // await pool.end();
         return;
     }
 
@@ -640,7 +640,7 @@ async function main() {
     // ── Shutdown ──────────────────────────────────────────────────────────────
     await ctx.close().catch(() => {});
     await browser.close().catch(() => {});
-    await pool.end().catch(() => {});
+    // await pool.end().catch(() => {});
 
     const elapsed = ((Date.now() - startTime) / 1000 / 60).toFixed(1);
 
