@@ -61,6 +61,30 @@ services:
     depends_on:
       - redis
 
+  agent-service:
+    build:
+      context: .
+      dockerfile: apps/agent-service/Dockerfile.dev
+
+    container_name: agent-service
+
+    ports:
+      - "4002:4002"
+
+    env_file:
+      - .env
+
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+
+    working_dir: /app/apps/agent-service
+
+    command: npx nodemon --config ../../nodemon.json  src/index.js --legacy-watch
+
+    depends_on:
+      - redis
+
 volumes:
   node_modules:
   redis_data:

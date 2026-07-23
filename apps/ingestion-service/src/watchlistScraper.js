@@ -262,30 +262,94 @@ async function logMarketToggle(page, log) {
   }
 }
 
-async function selectMarket(page, currentLabel, target, log) {
-  try {
-    // Open the dropdown (its toggle shows `currentLabel`). Use an EXACT match so
-    // "Main Market" doesn't accidentally hit "Main Market Index (TR)" etc. in the
-    // Sector Overview panel.
-    if (CONFIG.marketDropdownToggle) {
-      await page.click(CONFIG.marketDropdownToggle, { timeout: 6000 });
-    } else {
-      const exact = page.getByText(currentLabel, { exact: true });
-      if (await exact.count()) await exact.first().click({ timeout: 6000 });
-      else await page.getByText(currentLabel, { exact: false }).first().click({ timeout: 6000 });
+/**
+ * Click the first VISIBLE element whose text is `label`.
+ *
+ * Why this exists: the board renders each market name MORE THAN ONCE — the dropdown
+ * toggle, plus hidden Sector-Overview labels like "Main Market Index (PR)". A bare
+ * getByText(label).first() happily resolves to one of those hidden spans, and click()
+ * then spins ("element is not visible") until it times out. So we
+ *   (a) try an exact match first,
+ *   (b) drop anything containing "Index" (those are the ticker/overview labels), and
+ *   (c) REQUIRE visibility before clicking, walking every match instead of blindly
+ *       taking .first().
+ * Returns true only if something was actually clicked.
+ */
+async function clickVisibleText(page, label, timeout = 6000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const candidates = [
+      page.getByText(label, { exact: true }).filter({ visible: true }),
+      page.getByText(label, { exact: false }).filter({ visible: true, hasNotText: /index/i }),
+    ];
+    for (const loc of candidates) {
+      const n = await loc.count().catch(() => 0);
+      for (let i = 0; i < n; i++) {
+        const el = loc.nth(i);
+        if (!(await el.isVisible().catch(() => false))) continue;
+        try {
+          await el.click({ timeout: 1500 });
+          return true;
+        } catch { /* obscured or detached — try the next match */ }
+      }
     }
-    await page.waitForTimeout(800);
-    // Click the target option (exact avoids partial matches).
-    const opt = page.getByText(target, { exact: true });
-    if (await opt.count()) await opt.first().click({ timeout: 6000 });
-    else await page.getByText(target, { exact: false }).first().click({ timeout: 6000 });
-    await page.waitForTimeout(2500);
-    return true;
-  } catch (e) {
-    log(`  could not select "${target}": ${e.message}`);
+    await page.waitForTimeout(150);
+  }
+  return false;
+}
+
+/** Diagnostic: what the page actually offers for `label`, and whether it's visible. */
+async function textCandidates(page, label) {
+  return page.evaluate((lbl) => {
+    const out = [];
+    for (const e of document.querySelectorAll('*')) {
+      const t = (e.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!t.includes(lbl) || e.children.length > 2) continue;
+      const r = e.getBoundingClientRect();
+      out.push({
+        tag: e.tagName.toLowerCase(),
+        id: e.id || '',
+        cls: (e.className || '').toString().split(/\s+/).filter(Boolean).slice(0, 3).join('.'),
+        text: t.slice(0, 40),
+        visible: r.width > 0 && r.height > 0,
+      });
+      if (out.length >= 8) break;
+    }
+    return out;
+  }, label).catch(() => []);
+}
+
+async function selectMarket(page, currentLabel, target, log) {
+  // STEP 1 — open the dropdown. Its toggle shows the CURRENT market's label.
+  let opened;
+  if (CONFIG.marketDropdownToggle) {
+    opened = await page.click(CONFIG.marketDropdownToggle, { timeout: 6000 }).then(() => true).catch(() => false);
+  } else {
+    opened = await clickVisibleText(page, currentLabel, 6000);
+  }
+  if (!opened) {
+    // Name the step that ACTUALLY failed. The old message always blamed `target`, even when
+    // the toggle click was what timed out — which is why "could not select Premier Market"
+    // showed a log full of 'Main Market'.
+    log(`  could not OPEN the market dropdown (toggle "${currentLabel}") — skipping "${target}" this cycle.`);
+    log(`    candidates for "${currentLabel}": ${JSON.stringify(await textCandidates(page, currentLabel))}`);
+    log(`    tip: pin CONFIG.marketDropdownToggle to a VISIBLE selector from the list above to end the text ambiguity.`);
     return false;
   }
+  await page.waitForTimeout(800);
+
+  // STEP 2 — click the target option.
+  const picked = await clickVisibleText(page, target, 6000);
+  if (!picked) {
+    log(`  dropdown opened but option "${target}" was not clickable.`);
+    log(`    candidates for "${target}": ${JSON.stringify(await textCandidates(page, target))}`);
+    await page.keyboard.press('Escape').catch(() => {});   // don't leave the menu hanging open
+    return false;
+  }
+  await page.waitForTimeout(2500);
+  return true;
 }
+
 async function scrapeFromFrame(page, target, log) {
   const bodyHandle = await target.evaluateHandle((cfg) => {
     const bodies = [...document.querySelectorAll(cfg.bodyContainer)];

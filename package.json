@@ -12,6 +12,7 @@
     "dev:reset": "docker compose -f docker-compose.dev.yml down -v && docker compose -f docker-compose.dev.yml up --build",
     "prod": "docker compose up --build -d",
     "prod:down": "docker compose down",
+    "agent:dev": "nodemon apps/agent-service/src/index.js",
     "ingestion:dev": "nodemon apps/ingestion-service/src/index.js",
     "websocket:dev": "nodemon apps/websocket-service/src/index.js",
     "logs": "docker compose -f docker-compose.dev.yml logs -f"

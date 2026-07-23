@@ -1,0 +1,29 @@
+{
+  "name": "@trading/agent-service",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "dev": "node src/index.js",
+    "test": "node test/boot.test.js && node test/loop.test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "AI stock-analysis agent over the KSE trading data (read-only).",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "@trading/shared": "^1.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "pg": "^8.20.0",
+    "socket.io": "^4.8.3"
+  },
+  "exports": {
+    ".": "./src/bootstrap.js",
+    "./bootstrap": "./src/bootstrap.js",
+    "./socket": "./src/agent.socket.js",
+    "./routes": "./src/routes/index.js",
+    "./orchestrator": "./src/agent/orchestrator.js"
+  }
+}

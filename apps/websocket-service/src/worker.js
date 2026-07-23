@@ -11,7 +11,9 @@ const {
   broadcastMostActive,
   broadcastWatchList,
   broadcastWatchListToUser,
-  broadcastRadar, 
+  broadcastRadar,
+  broadcastTmi,
+  emitRadarNew,
 } = require('./socket');
 
 const worker = new Worker(
@@ -49,8 +51,18 @@ const worker = new Worker(
           job.data.date
         );
 
+      // TMI ticks right after the radar, on the same snapshot the radar just used.
+      // Its failure is swallowed on purpose: the execution layer must never be able to
+      // take down the radar the user actually relies on every day.
+      case 'tmi-tick':
+        return broadcastTmi(job.data && job.data.date).catch((e) =>
+          console.warn('[tmi] tick failed:', e.message));
+
       case 'radar-update':
         return broadcastRadar();
+
+      case 'radar-new':
+        return emitRadarNew(job.data.date, job.data.symbols);
 
       default:
         throw new Error(`Unknown job type: ${job.name}`);

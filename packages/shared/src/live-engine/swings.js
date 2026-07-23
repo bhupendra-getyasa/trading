@@ -36,10 +36,25 @@ function findPivots(prices, rev) {
   return piv;
 }
 
+// nearest named retracement level (f382/f500/f618) to a price. Pure; measurement only.
+function nearestFibLevel(fib, price) {
+  let best = null, bestDist = Infinity;
+  for (const name of ['f382', 'f500', 'f618']) {
+    const d = Math.abs(price - fib[name]);
+    if (d < bestDist) { bestDist = d; best = name; }
+  }
+  return best;
+}
+
 function detectSwings(series, cfg) {
-  const prices = series.map((s) => s.price).filter(U.isNum);
+  // `kept` is index-aligned to `prices`: same filter, same order, but retains .ts so a
+  // pivot index (e.g. pbLow.idx) can be mapped back to the snapshot timestamp it occurred at.
+  const kept = series.filter((s) => U.isNum(s.price));
+  const prices = kept.map((s) => s.price);
   const out = { swingCount: 0, swing1Fils: null, inPullback: false, pullbackHeldFib: false,
-    secondSwingStarting: false, firstSwingActive: false, fib: null, lastPrice: prices[prices.length - 1] ?? null };
+    secondSwingStarting: false, firstSwingActive: false, fib: null,
+    pbLow: null, pullback_pct: null, fib_level_hit: null, detected_ts: null, intended_fib_price: null,
+    lastPrice: prices[prices.length - 1] ?? null };
   if (prices.length < 3) return out;
 
   const piv = findPivots(prices, cfg.pivotReversalFils);
@@ -87,6 +102,20 @@ function detectSwings(series, cfg) {
     out.inPullback = true;
     out.pullbackHeldFib = pbLow.price >= fib.zoneLow && pbLow.price <= fib.zoneHigh;   // held inside entry zone
     if (price > pbLow.price && out.pullbackHeldFib) out.secondSwingStarting = true;    // turning up = swing 2
+    // MEASUREMENT ONLY (no entry-logic change): where the pullback actually bottomed
+    // on the swing1 retracement, so we can later see where real entries happen.
+    const swingRange = fib.high - fib.low;
+    out.pbLow = { idx: pbLow.idx, price: pbLow.price };
+    out.pullback_pct = swingRange > 0 ? U.round2((fib.high - pbLow.price) / swingRange) : null;
+    out.fib_level_hit = nearestFibLevel(fib, pbLow.price);
+    // CONFIRMATION-LAG measurement: the setup is complete/held at the pullback low, so its
+    // snapshot timestamp is when it was DETECTED (ready). The turn-up confirmation time is
+    // the run_ts recorded by the caller. epoch-ms here; caller converts to a timestamptz.
+    out.detected_ts = kept[pbLow.idx]?.ts ?? null;
+    // intended entry = the f500 retracement level, clamped inside the entry zone. This is
+    // the price we WANTED (near the pullback), vs the actual confirmation price recorded
+    // by the caller — the caller also gates out entries that have already run past the zone.
+    out.intended_fib_price = U.round1(U.clamp(fib.f500, fib.zoneLow, fib.zoneHigh));
   }
   return out;
 }

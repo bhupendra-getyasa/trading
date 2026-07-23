@@ -3,6 +3,7 @@ const authRoute = require('./auth');
 const fibLevelRoute = require('./fibLevel');
 const stockDetail = require('./stockDetail');
 const watchList = require('./watchList');
+const tmiExport = require('./tmiExport');
 
 const router = express.Router();
 
@@ -22,6 +23,10 @@ const defaultRoutes = [
   {
     path: '/watch-list',
     route: watchList,
+  },
+  {
+    path: '/tmi/export',
+    route: tmiExport,
   },
 ]
 

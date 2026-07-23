@@ -8,6 +8,7 @@ require('dotenv').config();
 
 const { init } = require('./socket');
 require('./worker');
+const { bootstrapAgent } = require('@trading/agent-service/bootstrap');
 
 const allowedOrigins = [
   'http:localhost:3000',
@@ -51,6 +52,7 @@ app.use(cors({
 // app.use(cookieParser());
 
 app.use('/', routes);
+app.use('/agent', require('@trading/agent-service/routes'));
 
 app.use((req, res, next) => {
   console.log("Incoming request:", req.method, req.url, req.headers.origin);
@@ -76,9 +78,18 @@ const port = process.env.PORT || 4000;
 
 init(server);
 
-server.listen(port, () => {
-  console.log(`WebSocket server running on port ${port}`);
-});
+// server.listen(port, () => {
+//   console.log(`WebSocket server running on port ${port}`);
+// });
+
+bootstrapAgent()
+  .then(() => {
+    server.listen(port, () => console.log(`Server listening on ${port}`));
+  })
+  .catch((err) => {
+    console.error('[agent] failed to initialise:', err.message);
+    process.exit(1);
+  });
 
 process.on('SIGINT', () => {
   console.log('Shutting down server...');

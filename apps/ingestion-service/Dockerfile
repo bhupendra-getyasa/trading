@@ -13,6 +13,7 @@ COPY package.json package-lock.json ./
 
 # 2. Copy ALL workspace definitions
 COPY apps/ingestion-service ./apps/ingestion-service
+COPY apps/agent-service/package.json apps/agent-service/
 COPY packages/shared ./packages/shared
 
 # 3. Install only production deps

@@ -53,5 +53,25 @@ services:
     depends_on:
       - redis
 
+  agent-service:
+    build:
+      context: .
+      dockerfile: apps/agent-service/Dockerfile
+
+    container_name: agent-service
+    mem_limit: 512m
+
+    ports:
+      - "4002:4002"
+
+    environment:
+      NODE_OPTIONS: "--max-old-space-size=384"
+
+    env_file:
+      - .env
+
+    depends_on:
+      - redis
+
 volumes:
   redis_data:
