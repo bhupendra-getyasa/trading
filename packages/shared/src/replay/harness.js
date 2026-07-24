@@ -211,8 +211,12 @@ function runWakeup(rawSession, config, commissionCfg = { pctPerSide: 0.0015, min
     const exits = rows.filter((r) => r.minute > entry.minute && (r.raw.bid_qty || 0) >= shares * 0.5);
     const out = exits.length ? exits[exits.length - 1] : rows[rows.length - 1];
     const sell = out.raw.bid;                                // you receive the bid
-    const comm = 2 * Math.max(commissionCfg.minKdPerSide ?? 0.5,
-      (commissionCfg.pctPerSide ?? 0.0015) * (buy * shares) / 1000);
+    // Each side is charged on ITS OWN value. Doubling the buy-side figure understates
+    // the cost of a winning trade, because the sell side is worth more than the buy
+    // side when the price has risen - i.e. it flatters exactly the trades we care about.
+    const side = (px) => Math.max(commissionCfg.minKdPerSide ?? 0.5,
+      (commissionCfg.pctPerSide ?? 0.0015) * (px * shares) / 1000);
+    const comm = side(buy) + side(sell);
     trades.push({ symbol: p.symbol, buy, sell, shares,
       buyMinute: entry.minute, sellMinute: out.minute,
       rangeOverCost: p.rangeOverCost, sellableKd: p.sellableKd,
