@@ -5,7 +5,7 @@ const { loadFormulas }         = require('@trading/shared/src/formula-engine/loa
 const { processTopPerformers } = require('@trading/shared/src/rankings/processTopPerformers.js');
 const { registerRadarHandlers, broadcastRadar, emitRadarNew } = require('./radar.socket');
 const { registerTmiHandlers, broadcastTmi } = require('./tmi.socket');
-const { registerAgentHandlers } = require('../../agent-service/src/agent.socket');
+const { registerAgentHandlers } = require('@trading/agent-service/socket');
 
 
 let io;
