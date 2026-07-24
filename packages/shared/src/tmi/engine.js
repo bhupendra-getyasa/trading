@@ -32,6 +32,7 @@
  */
 const S = require('./state');
 const R = require('./rules');
+const D = require('./decision');
 
 function commissionKd(price, shares, cfg) {
   const tradeKd = (price * shares) / 1000;
@@ -78,17 +79,40 @@ function tick(state, frame, config, commissionCfg = { pctPerSide: 0.0015, minKdP
   // ── 3. look for new entries ────────────────────────────────────────────────
   const openStocks = new Set(st.contracts.filter((c) => c.status !== S.CONTRACT.CLOSED).map((c) => c.symbol));
 
+  // THE STANDARD STRATEGY. Two questions: is today worth trading, and if so what.
+  // "Sit out" is a real answer — most of July's losses came from trading days that had
+  // nothing in them. Candidates are ranked on TODAY's evidence (liquidity, movement,
+  // direction, edge-after-cost) with history as a modifier rather than a veto, because
+  // the classifier rejected the best stock of the day twice in one week.
+  let toneMaxStocks = config.SELECTION.maxConcurrentStocks;
+  let scoreBy = null;
+  if (config.SELECTION.useDecisionFramework) {
+    const dec = D.decide(frame, config, st.budgetKd);
+    st = S.appendLog(st, { minute: frame.minute, ts: frame.ts, event: 'TONE',
+      reason: `${dec.tone.tone} — ${dec.tone.reason}`, detail: { tone: dec.tone, verdict: dec.verdict } });
+    toneMaxStocks = dec.tone.maxStocks;
+    scoreBy = new Map(dec.candidates.map((c) => [c.symbol, c]));
+    if (toneMaxStocks === 0) {
+      actions.push({ type: 'SIT_OUT', reason: dec.tone.reason, minute: frame.minute });
+      return { state: st, actions };                       // no entries today, at this minute
+    }
+  }
+
   const candidates = Object.entries(frame.symbols)
     .filter(([symbol, sym]) => sym.entrySignal && !openStocks.has(symbol))
-    .sort((a, b) => (b[1].sessionRangeFils ?? 0) - (a[1].sessionRangeFils ?? 0));  // most movement first
+    .filter(([symbol]) => !scoreBy || (scoreBy.get(symbol) && scoreBy.get(symbol).tradeable))
+    .sort((a, b) => scoreBy
+      ? (scoreBy.get(b[0])?.score ?? 0) - (scoreBy.get(a[0])?.score ?? 0)
+      : (b[1].sessionRangeFils ?? 0) - (a[1].sessionRangeFils ?? 0));  // most movement first
 
   // Slot budget for THIS minute. During the opening window we deliberately hold slots
   // back rather than let the first-firing nominations take them all.
   const inOpening = (config.SELECTION.openingWindowMinutes || 0) > 0
     && frame.minute < config.SELECTION.openingWindowMinutes;
-  const slotCap = inOpening
-    ? Math.min(config.SELECTION.maxConcurrentStocks, config.SELECTION.maxStocksInOpeningWindow)
-    : config.SELECTION.maxConcurrentStocks;
+  const slotCap = Math.min(
+    toneMaxStocks,                                          // the day's verdict caps everything
+    inOpening ? Math.min(config.SELECTION.maxConcurrentStocks, config.SELECTION.maxStocksInOpeningWindow)
+              : config.SELECTION.maxConcurrentStocks);
 
   for (const [symbol, sym] of candidates) {
     if (openStocks.size >= slotCap) break;

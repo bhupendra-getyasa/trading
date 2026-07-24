@@ -172,6 +172,44 @@ module.exports = {
     maxStocksOnDownDay: 1,       // shows what it actually buys us.
   },
 
+  // ---- WAKE-UP DETECTOR - selection --------------------------------------------
+  // Answers "which stocks are today offering a move big enough to be worth its own
+  // cost?" One metric does the work:
+  //
+  //     rangeOverCost = (session range %) / (spread % + commission %)
+  //
+  // Derived by hand from two stocks on 23-Jul, then confirmed on 735 stock-days:
+  //   DIGITUS 1628f, spread 23f (1.41%), range 6.1%  -> 3.6x  NOT tradeable
+  //   KHOT     188f, spread  6f (3.19%), range 20.6% -> 5.9x  tradeable
+  // KHOT's spread is WORSE in percent and it is still the better stock. Only the
+  // ratio means anything; neither number does alone.
+  //
+  // Correlation with the best trade actually available afterwards (m45, 735 samples):
+  //   rangeOverCost +0.455 | range% +0.303 | trades +0.255
+  //   move% +0.115  <- direction barely matters
+  //   depth  -0.035 <- depth predicts NOTHING alone; it is a constraint, not a signal
+  //
+  // Result: the average stock-day offers 6.7 KD; stocks passing this offered 63.7 KD,
+  // 75% of them above 20 KD. Roughly 9x better than picking at random.
+  //
+  // THE METRIC is grounded in mechanism. THE THRESHOLDS are not yet evidence - they
+  // were chosen on the same 7 days they were tested on, and this has never been run
+  // on a day it was not derived from.
+  WAKEUP: {
+    enabled: true,
+    decideAtMinute: 45,          // when to rank. Correlation strengthens through the day
+                                 // (+0.355 at m20, +0.412 at m30, +0.455 at m45) but
+                                 // waiting costs opportunity. 45 is the compromise.
+    minRangeOverCost: 4.0,       // roc>=2.5 gives 31 KD avg; >=4.0 gives 63.7 KD but only
+                                 // ~2.9 picks/day. Loosen this first if it finds nothing.
+    minRangeFils: 5,             // absolute floor. A 1.2-fil range on a 0.1-fil spread
+                                 // scores brilliantly and cannot be traded (EKTTITAB).
+    minSellableKd: 1000,         // must be able to EXIT, not merely enter
+    minTrades: 20,               // in the window so far - is anyone actually here
+    minSamples: 15,
+    maxPicks: 2,                 // how many to hold at once
+  },
+
   // ── the standard strategy: when to trade at all, and what ────────────────────
   TONE: {
     // Day-level verdict. RED means SIT OUT — a real answer, not a failure to choose.

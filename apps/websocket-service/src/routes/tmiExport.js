@@ -31,6 +31,31 @@ const T = {
 
 const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
 
+/*
+ * selectAvailable — SELECT only the columns that actually exist on the table.
+ *
+ * This codebase adds columns through idempotent ALTERs that run at engine start, so at
+ * any moment a table may be one deploy behind the code reading it. Asking the catalogue
+ * first costs one cheap query and turns a hard failure into a slightly smaller payload.
+ * Missing columns come back as nulls, which every consumer already handles.
+ */
+async function selectAvailable(table, wanted, tail = '', params = []) {
+  const [schema, name] = table.includes('.') ? table.split('.') : ['public', table];
+  const { rows: cols } = await pool.query(
+    `SELECT column_name FROM information_schema.columns
+      WHERE table_schema = $1 AND table_name = $2;`, [schema, name]);
+  const have = new Set(cols.map((c) => c.column_name));
+  const use = wanted.filter((c) => have.has(c));
+  if (!use.length) return [];
+  const missing = wanted.filter((c) => !have.has(c));
+  if (missing.length) {
+    console.warn(`[tmi-export] ${table}: missing ${missing.join(', ')} — ` +
+      `run sql/001_tmi_and_book.sql, or start the live engine so ensureTables() applies it`);
+  }
+  const { rows } = await pool.query(`SELECT ${use.join(', ')} FROM ${table} ${tail};`, params);
+  return rows.map((r) => { for (const m of missing) r[m] = null; return r; });
+}
+
 router.get('/days', async (_req, res) => {
   try {
     const { rows } = await pool.query(
@@ -51,21 +76,40 @@ router.get('/:date', async (req, res) => {
     // emits 0 for symbols it has not populated, and one zero destroys everything
     // derived from the price path (19-Jul: RASIYAT got a 159-fil target from a
     // "range" that was really 609 - 0).
-    const { rows: quotes } = await pool.query(
+    let { rows: quotes } = await pool.query(
       `SELECT symbol, created_at, last_price, bid, bid_qty, offer, offer_qty, trades,
               high_price, low_price, volume
          FROM ${T.quotes}
-        WHERE trading_date = $1 AND last_price IS NOT NULL AND last_price > 0
+        WHERE trading_date::text = $1 AND last_price IS NOT NULL AND last_price > 0
         ORDER BY symbol, created_at ASC;`, [date]);
+    if (!quotes.length) {
+      // fall back to the Kuwait calendar day as a UTC range on created_at, for the same
+      // reason tmi.session.js does: trading_date can be absent or differently typed, and
+      // a silent zero-row result is worse than a slower query.
+      ({ rows: quotes } = await pool.query(
+        `SELECT symbol, created_at, last_price, bid, bid_qty, offer, offer_qty, trades,
+                high_price, low_price, volume
+           FROM ${T.quotes}
+          WHERE created_at >= ($1::date - interval '3 hours')
+            AND created_at <  ($1::date + interval '21 hours')
+            AND last_price IS NOT NULL AND last_price > 0
+          ORDER BY symbol, created_at ASC;`, [date]));
+    }
     if (!quotes.length) return res.status(404).json({ error: `no quote data for ${date}` });
 
     // ── radar events: the nomination per symbol (first one wins) ───────────
-    const { rows: events } = await pool.query(
-      `SELECT symbol, run_ts, entry_type, entry_price, profile, trend, lane, swing1_fils,
-              reject_reason, history_qualifies, outcome, detected_ts, triggered_ts,
-              liquidity_pass, liquidity_blocked, book, liquidity_checks, reasons
-         FROM ${T.events}
-        WHERE trading_day = $1 ORDER BY symbol, run_ts ASC;`, [date]);
+    // Column set is resolved from the catalogue rather than assumed. The liquidity/book
+    // columns are added by the book patch's DDL, which only runs when the live scanner
+    // runs — so on a fresh deploy, or before the first session, they legitimately do not
+    // exist yet. Selecting them blindly turns the whole export into
+    // `column "liquidity_pass" does not exist`, which reads like a broken endpoint rather
+    // than a migration that has not been applied.
+    const events = await selectAvailable(T.events,
+      ['symbol', 'run_ts', 'entry_type', 'entry_price', 'profile', 'trend', 'lane',
+       'swing1_fils', 'reject_reason', 'history_qualifies', 'outcome',
+       'detected_ts', 'triggered_ts', 'liquidity_pass', 'liquidity_blocked',
+       'book', 'liquidity_checks', 'reasons'],
+      `WHERE trading_day::text = $1 ORDER BY symbol, run_ts ASC`, [date]);
 
     const { rows: cls } = await pool.query(
       `SELECT symbol, profile, lane, trend, target_fils, net_fils, tradable_swings,
@@ -73,7 +117,7 @@ router.get('/:date', async (req, res) => {
          FROM ${T.cls};`);
 
     const { rows: opps } = await pool.query(
-      `SELECT * FROM ${T.opps} WHERE trading_day = $1 ORDER BY trigger_ts ASC;`, [date])
+      `SELECT * FROM ${T.opps} WHERE trading_day::text = $1 ORDER BY trigger_ts ASC;`, [date])
       .catch(() => ({ rows: [] }));
 
     const { rows: decisions } = await pool.query(

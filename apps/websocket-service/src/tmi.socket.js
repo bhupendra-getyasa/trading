@@ -49,14 +49,14 @@ function registerTmiHandlers(io, socket) {
       if (!view) {
         // Say WHAT the server can see, not just that it saw nothing. "No data" sent
         // someone to check a database that turned out to be full.
-        // const diag = await session.diagnose(day).catch(() => null);
-        const diag = await session.diagnose(day).catch((error) => console.log('Error: ', error));
+        const diag = await session.diagnose(day).catch(() => null);
+        const usable = ((diag && diag.recentDays) || []).filter((d) => d.pct_of_session >= 50);
         socket.emit('tmi:error', {
-          message: `no usable quote data for ${day}`,
+          message: diag && diag.verdict ? `${day}: ${diag.verdict}` : `no usable quote data for ${day}`,
           diagnostic: diag,
-          hint: diag && diag.recentDays && diag.recentDays.length
-            ? `dates present: ${diag.recentDays.map((d) => d.day).join(', ')}`
-            : 'stock_quotes appears empty for every date',
+          hint: usable.length
+            ? `days with enough coverage to replay: ${usable.map((d) => d.day + ' (' + d.pct_of_session + '%)').join(', ')}`
+            : 'no stored day has enough coverage to replay - check that the watchlist scraper is running',
         });
         return;
       }

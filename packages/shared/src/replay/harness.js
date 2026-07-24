@@ -17,6 +17,7 @@
  */
 const TMI = require('../tmi/engine');
 const SIG = require('./signals');
+const DET = require('../tmi/detector');
 const S = require('../tmi/state');
 const R = require('../tmi/rules');
 const { buildBook } = require('../live-engine/liquidity');
@@ -56,6 +57,10 @@ function buildFrame(session, i, cfg, liqCfg) {
       liquidityPass: book && !book.stale && !book.insufficient ? undefined : undefined,
       entrySignal: false, entryPrice: null, entryReason: null,
       _nominated: !!nom,
+      // decision.js needs these: it scores EVERY radar candidate, and history is a
+      // weighted input rather than a gate, so the classification must reach it.
+      nominated: !!nom,
+      classification: s.cls || null,
     };
   }
   return { minute: i, ts, symbols };
@@ -73,6 +78,11 @@ function attachSignals(frame, session, state, cfg) {
     const traded = state.stocks[sym] && state.stocks[sym].contractSeq > 0;
 
     if (f.entrySignal) continue;                 // signals.js already decided
+    // The config gates apply to EVERY entry path, including the radar nomination.
+    // Skipping them here is the bug that made noTradeBeforeMinute and the swing band
+    // apply only to re-entries.
+    const gate = R.passesEntryFilters({ minute: frame.minute, swing1Fils: f.swing1Fils, cfg });
+    if (!gate.ok) continue;
     if (nom && nom.minute === frame.minute && nom.qualified) {
       f.entrySignal = true; f.entryPrice = nom.price ?? f.price; f.entryReason = 'radar_nomination';
       continue;
@@ -164,4 +174,67 @@ function run(rawSession, config, liqCfg, commissionCfg) {
   return { state, summary, actions: allActions, contracts: closed };
 }
 
-module.exports = { run, buildFrame, attachSignals, normalizeSession };
+/*
+ * runWakeup(session, config, commissionCfg)
+ *   The WAKE-UP model end to end: rank at WAKEUP.decideAtMinute, buy the top picks at
+ *   the OFFER, hold, sell at the BID. No scalping, no re-entry, no quiet exit.
+ *
+ * Buys and sells at the real quotes rather than at last_price, and refuses any exit
+ * where the bid cannot absorb the position. Those two details are the difference
+ * between a plausible backtest and a number that means something.
+ */
+function runWakeup(rawSession, config, commissionCfg = { pctPerSide: 0.0015, minKdPerSide: 0.5 }) {
+  const s = normalizeSession(rawSession);
+  const W = config.WAKEUP;
+  const N = W.decideAtMinute;
+
+  // everything the detector may look at: the session UP TO minute N, nothing after
+  const upto = {};
+  for (const [sym, d] of Object.entries(s.symbols)) {
+    upto[sym] = d.rows.filter((r) => r.minute <= N);
+  }
+  const ranked = DET.scan(upto, W, commissionCfg);
+  const picks = ranked.filter((r) => r.pass).slice(0, W.maxPicks);
+
+  const slice = (config.BUDGET.defaultKd * (1 - config.BUDGET.reservePct)) / W.maxPicks;
+  const trades = [];
+  for (const p of picks) {
+    const rows = s.symbols[p.symbol].rows.filter((r) => r.price > 0 && r.raw.bid > 0 && r.raw.offer > 0);
+    const entry = rows.find((r) => r.minute >= N);
+    if (!entry) continue;
+    const buy = entry.raw.offer;                             // you pay the offer
+    const shares = Math.floor(Math.min(
+      (slice * 1000) / buy, (entry.raw.offer_qty || 0) * 0.5) / 100) * 100;
+    if (shares < 200) continue;
+
+    // exit: last minute where the bid can actually absorb the position
+    const exits = rows.filter((r) => r.minute > entry.minute && (r.raw.bid_qty || 0) >= shares * 0.5);
+    const out = exits.length ? exits[exits.length - 1] : rows[rows.length - 1];
+    const sell = out.raw.bid;                                // you receive the bid
+    const comm = 2 * Math.max(commissionCfg.minKdPerSide ?? 0.5,
+      (commissionCfg.pctPerSide ?? 0.0015) * (buy * shares) / 1000);
+    trades.push({ symbol: p.symbol, buy, sell, shares,
+      buyMinute: entry.minute, sellMinute: out.minute,
+      rangeOverCost: p.rangeOverCost, sellableKd: p.sellableKd,
+      grossKd: Math.round(((sell - buy) * shares) / 1000 * 100) / 100,
+      commissionKd: Math.round(comm * 100) / 100,
+      netKd: Math.round((((sell - buy) * shares) / 1000 - comm) * 100) / 100 });
+  }
+  const net = trades.reduce((a, t) => a + t.netKd, 0);
+  return {
+    summary: {
+      tradingDay: s.tradingDay, budgetKd: config.BUDGET.defaultKd,
+      trips: trades.length, wins: trades.filter((t) => t.netKd > 0).length,
+      grossKd: Math.round(trades.reduce((a, t) => a + t.grossKd, 0) * 100) / 100,
+      commissionKd: Math.round(trades.reduce((a, t) => a + t.commissionKd, 0) * 100) / 100,
+      netKd: Math.round(net * 100) / 100,
+      roiPct: Math.round((net / config.BUDGET.defaultKd) * 10000) / 100,
+    },
+    trades,
+    // every candidate, passed or refused, with the reason. This is the record that
+    // makes "why didn't it pick X?" answerable weeks later.
+    ranked: ranked.slice(0, 25),
+  };
+}
+
+module.exports = { run, runWakeup, buildFrame, attachSignals, normalizeSession };

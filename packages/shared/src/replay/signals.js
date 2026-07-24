@@ -43,11 +43,10 @@ function attach(frame, session, state, cfg) {
     const sw = swingsFor(rows, windowN);
     if (!sw.fib) continue;
 
-    // swing-size band + opening exclusion, both applied to whichever model is active
+    // same shared gate the nomination path uses — one implementation, no drift
     const s1 = sw.swing1Fils ?? 0;
-    if (cfg.ENTRY.minSwing1Fils && s1 < cfg.ENTRY.minSwing1Fils) continue;
-    if (cfg.ENTRY.maxSwing1Fils && s1 > cfg.ENTRY.maxSwing1Fils) continue;
-    if (cfg.SELECTION.noTradeBeforeMinute && frame.minute < cfg.SELECTION.noTradeBeforeMinute) continue;
+    f.swing1Fils = s1;                       // carried so the nomination path can gate on it too
+    if (!R.passesEntryFilters({ minute: frame.minute, swing1Fils: s1, cfg }).ok) continue;
 
     if (cfg.ENTRY.model === 'zone') {
       // inside the pullback band, setup still alive, not yet confirmed

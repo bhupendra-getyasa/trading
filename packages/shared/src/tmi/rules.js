@@ -216,3 +216,28 @@ function detectReentry(sessionPrices, cfg, lookback = 20) {
 }
 
 module.exports.detectReentry = detectReentry;
+
+/*
+ * passesEntryFilters — the config gates that apply to EVERY entry, whatever produced
+ * the signal.
+ *
+ * Extracted because it was already wrong once: the radar-nomination path skipped these
+ * checks entirely, so noTradeBeforeMinute and the swing band silently applied only to
+ * re-entries — never to the FIRST entry on a stock, which is most of them. The sweep
+ * results for those two filters were meaningless until this was fixed. One function,
+ * called from both paths, so they cannot diverge again.
+ */
+function passesEntryFilters({ minute, swing1Fils, cfg }) {
+  if (cfg.SELECTION.noTradeBeforeMinute && minute < cfg.SELECTION.noTradeBeforeMinute) {
+    return { ok: false, reason: `before_minute_${cfg.SELECTION.noTradeBeforeMinute}` };
+  }
+  const s1 = swing1Fils ?? null;
+  if (cfg.ENTRY.minSwing1Fils && (s1 == null || s1 < cfg.ENTRY.minSwing1Fils)) {
+    return { ok: false, reason: `swing1 ${s1}f < ${cfg.ENTRY.minSwing1Fils}f` };
+  }
+  if (cfg.ENTRY.maxSwing1Fils && s1 != null && s1 > cfg.ENTRY.maxSwing1Fils) {
+    return { ok: false, reason: `swing1 ${s1}f > ${cfg.ENTRY.maxSwing1Fils}f` };
+  }
+  return { ok: true };
+}
+module.exports.passesEntryFilters = passesEntryFilters;

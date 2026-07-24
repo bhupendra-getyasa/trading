@@ -121,13 +121,36 @@ async function diagnose(date) {
     `SELECT column_name, data_type FROM information_schema.columns
       WHERE table_name = 'stock_quotes' AND column_name IN
       ('trading_date','last_price','created_at','bid_qty','trades') ORDER BY column_name;`);
+
+  // Coverage, not just row counts. A day can have rows and still be unusable: a full
+  // session is ~240 minutes x ~135 symbols, so 162 rows across 18 symbols is a capture
+  // that barely started, not a trading day. Reporting rows alone hides that.
   out.recentDays = await q(
-    `SELECT trading_date::text AS day, count(*)::int AS rows, count(DISTINCT symbol)::int AS symbols
+    `SELECT trading_date::text AS day,
+            count(*)::int AS rows,
+            count(DISTINCT symbol)::int AS symbols,
+            count(DISTINCT date_trunc('minute', created_at))::int AS minutes,
+            count(*) FILTER (WHERE last_price > 0)::int AS with_price,
+            round(100.0 * count(*) / NULLIF(count(DISTINCT symbol) * 240.0, 0))::int AS pct_of_session
        FROM ${QUOTES} GROUP BY trading_date ORDER BY trading_date DESC LIMIT 10;`);
-  out.byCreatedAt = await q(
-    `SELECT count(*)::int AS rows FROM ${QUOTES}
+
+  out.thisDay = (await q(
+    `SELECT count(*)::int AS rows,
+            count(DISTINCT symbol)::int AS symbols,
+            count(DISTINCT date_trunc('minute', created_at))::int AS minutes,
+            count(*) FILTER (WHERE last_price > 0)::int AS with_price,
+            min(created_at) AS first_row, max(created_at) AS last_row
+       FROM ${QUOTES}
       WHERE created_at >= ($1::date - interval '${TZ} hours')
-        AND created_at <  ($1::date + interval '${24 - TZ} hours');`, [date]);
+        AND created_at <  ($1::date + interval '${24 - TZ} hours');`, [date]))[0] || null;
+
+  // enough to replay? a day needs real coverage, not a handful of rows
+  const d = out.thisDay;
+  out.usable = !!(d && d.with_price > 0 && d.symbols >= 5 && d.minutes >= 30);
+  out.verdict = !d || !d.rows ? 'no rows for this date'
+    : !d.with_price ? `${d.rows} rows but every last_price is 0 or null — capture ran before the open`
+    : !out.usable ? `only ${d.rows} rows / ${d.symbols} symbols / ${d.minutes} minutes — a full session is ~240 minutes x ~135 symbols. The scraper did not run for most of this day.`
+    : 'usable';
   return out;
 }
 
