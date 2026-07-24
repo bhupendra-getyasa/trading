@@ -52,11 +52,31 @@ const CONFIG = {
   symbolCell: '.symbol-fore-color',
 
   settleMs: 500,
-  wheelDelta: 500,
+
+  // FIX — was 500. The board's scroll viewport (clientHeight) is 426px, so a
+  // 500px wheel step jumped PAST the bottom of the visible window and left a
+  // ~74px band (~3 rows) that was never rendered at any point in the scan.
+  // Premier (scrollHeight 1014, max scrollTop 588) produced 1 such gap ->
+  // NIND was lost. Main (scrollHeight 2626, max scrollTop 2200) produced 4 ->
+  // ACICO, ABAR, INJAZZAT and SOKOUK were lost. Because both the step size and
+  // the board height are fixed, the SAME rows fell in the blind bands on every
+  // run, which is why exactly those five went missing every time.
+  //
+  // 250 < 426 leaves 176px (~6.8 rows) of overlap on every step, so no row can
+  // fall between two consecutive windows. Keep this value BELOW the viewport
+  // height; if the terminal layout ever changes, re-check clientHeight first.
+  wheelDelta: 250,
+
   maxStalls: 6,
   hardScrollCap: 200,
   dataWaitMs: 20000,
   loginTimeoutMs: 90000,
+
+  // Only symbols present in market_stock_snapshots are written to stock_quotes.
+  // Set to false to persist everything the board returns (previous behaviour).
+  restrictToSnapshotSymbols: true,
+  snapshotSymbolTtlMs: 10 * 60 * 1000,   // re-read the reference list every 10 min
+  minSnapshotSymbols: 50,                // sanity floor before trusting a query
 
   outDir: path.resolve(__dirname, 'out'),
 };
@@ -392,6 +412,63 @@ async function scrapeFromFrame(page, target, log) {
     (a.code || '').localeCompare(b.code || '', undefined, { numeric: true }));
 }
 
+// ─── Reference symbol list (market_stock_snapshots) ──────────────────────────
+// Used ONLY to decide what gets written to stock_quotes. The scrape itself is
+// untouched — the board is still read in full, so the log still shows the true
+// board counts and any drift between the two lists stays visible.
+
+let snapshotSymbolCache = { at: 0, set: null };
+
+/**
+ * Symbols from the most recent market_stock_snapshots batch.
+ *
+ * Pinned to MAX(created_at) because a snapshot run writes every row with one
+ * timestamp. If that batch comes back implausibly small (partial write, or a
+ * schema where rows do NOT share a timestamp) we widen to a 24h DISTINCT
+ * window rather than trusting it — an unguarded global MAX(created_at) is the
+ * same failure shape as the C-1 bug from the refactor.
+ *
+ * The last good result is cached, so a transient DB hiccup cannot silently
+ * empty the allow-list and cause a cycle to write nothing.
+ */
+async function loadSnapshotSymbols(pool, log) {
+  const now = Date.now();
+  if (snapshotSymbolCache.set && (now - snapshotSymbolCache.at) < CONFIG.snapshotSymbolTtlMs) {
+    return snapshotSymbolCache.set;
+  }
+
+  try {
+    let res = await pool.query(`
+      SELECT DISTINCT UPPER(TRIM(symbol)) AS symbol
+      FROM market_stock_snapshots
+      WHERE created_at = (SELECT MAX(created_at) FROM market_stock_snapshots)
+        AND symbol IS NOT NULL
+    `);
+
+    if (res.rows.length < CONFIG.minSnapshotSymbols) {
+      log(`  snapshot list: latest batch had only ${res.rows.length} rows — widening to 24h`);
+      res = await pool.query(`
+        SELECT DISTINCT UPPER(TRIM(symbol)) AS symbol
+        FROM market_stock_snapshots
+        WHERE created_at >= NOW() - INTERVAL '24 hours'
+          AND symbol IS NOT NULL
+      `);
+    }
+
+    const set = new Set(res.rows.map((r) => r.symbol).filter(Boolean));
+    if (!set.size) throw new Error('market_stock_snapshots returned no symbols');
+
+    snapshotSymbolCache = { at: now, set };
+    return set;
+  } catch (err) {
+    if (snapshotSymbolCache.set) {
+      log(`  snapshot list: query failed (${err.message}) — reusing cached list of ${snapshotSymbolCache.set.size}`);
+      return snapshotSymbolCache.set;
+    }
+    throw new Error(`Cannot read market_stock_snapshots and no cached list available: ${err.message}`);
+  }
+}
+
 // ─── Persistent browser state ────────────────────────────────────────────────
 let browser = null;
 let context = null;
@@ -472,6 +549,31 @@ async function scrapeStocks() {
 async function saveQuotes(pool, records) {
   if (!pool) throw new Error('saveQuotes(pool, records): pool is required.');
   if (!records || !records.length) return { inserted: 0 };
+
+  // Keep only symbols that exist in market_stock_snapshots. The board carries a
+  // few names the snapshot source omits (mostly zero-volume issues), and those
+  // must not reach stock_quotes.
+  let toInsert = records;
+  let skipped = [];
+  if (CONFIG.restrictToSnapshotSymbols) {
+    const allowed = await loadSnapshotSymbols(pool, log);
+    toInsert = [];
+    for (const r of records) {
+      const key = String(r.symbol || '').trim().toUpperCase();
+      if (key && allowed.has(key)) toInsert.push(r);
+      else skipped.push(r.symbol);
+    }
+
+    const got = new Set(toInsert.map((r) => String(r.symbol).trim().toUpperCase()));
+    const notScraped = [...allowed].filter((s) => !got.has(s));
+
+    log(`  filter: ${toInsert.length}/${records.length} symbols matched market_stock_snapshots (${allowed.size} in list)`);
+    if (skipped.length) log(`  filter: skipped (not in snapshot list) -> ${skipped.join(', ')}`);
+    if (notScraped.length) log(`  filter: in snapshot list but NOT scraped -> ${notScraped.join(', ')}`);
+
+    if (!toInsert.length) return { inserted: 0, skipped: skipped.length, missing: notScraped };
+  }
+
   const batchId = crypto.randomUUID();
   const createdAt = new Date().toISOString();
   const tradingDate = kuwaitDate();
@@ -481,8 +583,8 @@ async function saveQuotes(pool, records) {
     await client.query('BEGIN');
     const colList = DB_COLUMNS.join(', ');
     const CHUNK = 500;
-    for (let i = 0; i < records.length; i += CHUNK) {
-      const chunk = records.slice(i, i + CHUNK);
+    for (let i = 0; i < toInsert.length; i += CHUNK) {
+      const chunk = toInsert.slice(i, i + CHUNK);
       const values = [];
       const tuples = chunk.map((r, ri) => {
         const row = [
@@ -509,7 +611,7 @@ async function saveQuotes(pool, records) {
   } finally {
     client.release();
   }
-  return { inserted };
+  return { inserted, skipped: skipped.length };
 }
 
 async function hardClose() {

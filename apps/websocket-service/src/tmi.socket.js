@@ -22,7 +22,7 @@
  */
 const svc = require('./services/tmi.service');
 const repo = require('./services/tmi.repository');
-const { run: replayRun } = require('@trading/shared/src/replay/harness');
+const { run: replayRun, runWakeup } = require('@trading/shared/src/replay/harness');
 const DEFAULT_CFG = require('@trading/shared/src/tmi/config');
 const LIVE = require('@trading/shared/src/live-engine/config');
 const { pool } = require('@trading/shared');
@@ -39,12 +39,21 @@ function registerTmiHandlers(io, socket) {
       socket.join(room(day));
       let view = svc.currentView(day);
       if (!view) {
-        // A finished day must be REPLAYED, not ticked. runTick builds state one minute
-        // at a time as the session unfolds; run once against a closed day it returns an
-        // empty view, which is exactly the "all zones empty" symptom.
-        view = svc.isLiveSession(day)
-          ? (await svc.runTick(day))?.view
-          : await svc.replayDay(day);
+        if (svc.isLiveSession(day)) {
+          view = (await svc.runTick(day))?.view;
+        } else {
+          // A FINISHED day: show what actually happened, from tmi_contracts.
+          // Recorded fills are facts. Re-simulating instead makes your own history
+          // change every time a rule changes - tighten a filter and yesterday's real
+          // trades vanish, because the new rules would not have taken them.
+          view = await svc.loadRecordedDay(day);
+          // Only if nothing was ever recorded do we fall back to a simulation, and we
+          // label it so the screen cannot pass a hypothetical off as history.
+          if (!view) {
+            view = await svc.replayDay(day);
+            if (view) view.simulated = true;
+          }
+        }
       }
       if (!view) {
         // Say WHAT the server can see, not just that it saw nothing. "No data" sent
@@ -99,22 +108,52 @@ function registerTmiHandlers(io, socket) {
     } catch (e) { socket.emit('tmi:error', { message: e.message }); }
   });
 
-  // read-only: replays a stored day through the real engine and reports the result
-  socket.on('tmi:replay', async ({ date, config } = {}) => {
+  /*
+   * tmi:replay — read-only. Runs a stored day through the real engine.
+   *   mode: 'wakeup' (default) | 'signal'
+   *
+   * Always returns `ranked`: every candidate the detector measured, passed or refused,
+   * each with the reason it failed. A day with no picks is a legitimate answer, but
+   * "nothing" on its own is not an explanation - the near-misses are what tell you
+   * whether a threshold is slightly too tight or the market was genuinely empty.
+   */
+  socket.on('tmi:replay', async ({ date, config, mode } = {}) => {
     try {
       if (!date) throw new Error('date required');
       const session = await loadSessionFromDb(date);
       if (!session) throw new Error(`no data for ${date}`);
       const cfg = config || (await svc.getConfig()).cfg;
-      const r = replayRun(session, cfg, LIVE.LIQUIDITY, LIVE.COMMISSION);
-      socket.emit('tmi:replay:result', { date, summary: r.summary, contracts: r.contracts });
+      const useWakeup = (mode || 'wakeup') === 'wakeup' && cfg.WAKEUP && cfg.WAKEUP.enabled;
+
+      if (useWakeup) {
+        const r = runWakeup(session, cfg, LIVE.COMMISSION);
+        socket.emit('tmi:replay:result', {
+          date, mode: 'wakeup', summary: r.summary,
+          contracts: r.trades.map((t) => ({ ...t, id: t.symbol + '-' + t.buyMinute, seq: 1 })),
+          ranked: r.ranked,
+          decideAtMinute: cfg.WAKEUP.decideAtMinute,
+          note: r.trades.length ? null
+            : `no stock passed the filter at minute ${cfg.WAKEUP.decideAtMinute}`,
+        });
+      } else {
+        const r = replayRun(session, cfg, LIVE.LIQUIDITY, LIVE.COMMISSION);
+        socket.emit('tmi:replay:result', {
+          date, mode: 'signal', summary: r.summary, contracts: r.contracts, ranked: null,
+        });
+      }
     } catch (e) { socket.emit('tmi:error', { message: e.message }); }
   });
 
   // ask the server what it can actually see, without opening psql
   socket.on('tmi:diagnose', async ({ date } = {}) => {
-    try { socket.emit('tmi:diagnose:result', await session.diagnose(date || svc.kuwaitDay())); }
-    catch (e) { socket.emit('tmi:error', { message: e.message }); }
+    try {
+      const day = date || svc.kuwaitDay();
+      const [quotes, contracts] = await Promise.all([
+        session.diagnose(day),
+        repo.diagnoseContracts(day),
+      ]);
+      socket.emit('tmi:diagnose:result', { quotes, contracts });
+    } catch (e) { socket.emit('tmi:error', { message: e.message }); }
   });
 
   socket.on('tmi:audit', async ({ date, symbol } = {}) => {

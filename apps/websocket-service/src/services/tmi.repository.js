@@ -133,9 +133,49 @@ async function upsertContract(c, tradingDay, mode, configVersion, db = pool) {
 
 async function loadContracts(tradingDay, db = pool) {
   await ensure(db);
+  // ::text on both sides - the same type-tolerance stock_quotes needed. A silent
+  // zero-row result from a type mismatch is indistinguishable from "nothing traded",
+  // and that ambiguity has already cost us a debugging session.
   const { rows } = await db.query(
-    `SELECT * FROM public.tmi_contracts WHERE trading_day = $1 ORDER BY symbol, seq;`, [tradingDay]);
+    `SELECT * FROM public.tmi_contracts WHERE trading_day::text = $1 ORDER BY symbol, seq;`,
+    [String(tradingDay)]);
   return rows;
+}
+
+/*
+ * diagnoseContracts — has TMI ever actually recorded anything?
+ *
+ * Distinguishes three states that all look identical on screen:
+ *   - the table is empty                -> TMI has never persisted a contract
+ *   - rows exist for other days only    -> it worked once and stopped
+ *   - rows exist for this day           -> the loader is at fault
+ */
+async function diagnoseContracts(tradingDay, db = pool) {
+  await ensure(db);
+  const q = async (sql, p) => (await db.query(sql, p).catch((e) => ({ rows: [{ error: e.message }] }))).rows;
+  const out = { tradingDay };
+  out.totalRows = (await q(`SELECT count(*)::int AS n FROM public.tmi_contracts;`))[0];
+  out.byDay = await q(
+    `SELECT trading_day::text AS day, mode, count(*)::int AS contracts,
+            count(*) FILTER (WHERE status='CLOSED')::int AS closed,
+            round(sum(net_kd)::numeric,2) AS net_kd,
+            min(created_at) AS first_write, max(updated_at) AS last_write
+       FROM public.tmi_contracts
+      GROUP BY trading_day, mode ORDER BY trading_day DESC LIMIT 10;`);
+  out.thisDay = (await q(
+    `SELECT count(*)::int AS contracts FROM public.tmi_contracts WHERE trading_day::text = $1;`,
+    [String(tradingDay)]))[0];
+  out.actionsByDay = await q(
+    `SELECT trading_day::text AS day, count(*)::int AS actions,
+            count(*) FILTER (WHERE event='BUY_FILL')::int AS buys,
+            count(*) FILTER (WHERE event='SELL_FILL')::int AS sells
+       FROM public.tmi_actions GROUP BY trading_day ORDER BY trading_day DESC LIMIT 10;`);
+  out.verdict = !out.totalRows || !out.totalRows.n
+    ? 'tmi_contracts is EMPTY - TMI has never persisted a contract. The per-minute tick is probably not running.'
+    : (out.thisDay && out.thisDay.contracts)
+      ? `${out.thisDay.contracts} contracts recorded for ${tradingDay} - the loader is at fault, not the data.`
+      : `nothing recorded for ${tradingDay}, but other days have rows - see byDay.`;
+  return out;
 }
 
 // ── actions ───────────────────────────────────────────────────────────────
@@ -165,4 +205,4 @@ async function loadActions(tradingDay, { symbol, limit = 2000 } = {}, db = pool)
 }
 
 module.exports = { DDL, ensure, activeConfig, saveConfig, configHistory,
-  upsertContract, loadContracts, logAction, logActions, loadActions };
+  upsertContract, loadContracts, diagnoseContracts, logAction, logActions, loadActions };

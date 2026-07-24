@@ -143,6 +143,72 @@ function isLiveSession(day, now = Date.now()) {
 }
 
 /*
+ * loadRecordedDay — what ACTUALLY happened, from tmi_contracts.
+ *
+ * This is the one that must answer "show me yesterday". A recorded contract is a fact:
+ * it has a fill price, a real commission, a real P&L. Re-simulating the day instead
+ * silently rewrites history every time the config changes - subscribe to a past date
+ * after tightening a rule and your own trading record disappears, because the new rules
+ * would not have taken those trades.
+ *
+ * Replay is a separate question ("what WOULD these rules have done?") and belongs behind
+ * its own explicit action, which is the Replay screen.
+ */
+async function loadRecordedDay(tradingDay) {
+  const rows = await repo.loadContracts(tradingDay);
+  if (!rows.length) return null;
+  const { version, cfg } = await getConfig();
+
+  const contracts = rows.map((r) => ({
+    id: r.id, symbol: r.symbol, seq: r.seq, status: r.status,
+    signalMinute: r.signal_minute, signalPrice: num(r.signal_price),
+    shares: r.shares, target: num(r.target_fils), stop: num(r.stop_fils),
+    entryReason: r.entry_reason, entryBook: r.entry_book,
+    buyPrice: num(r.buy_price), buyMinute: r.buy_minute,
+    sellPrice: num(r.sell_price), sellMinute: r.sell_minute,
+    peak: num(r.peak), exitReason: r.exit_reason,
+    grossKd: num(r.gross_kd), commissionKd: num(r.commission_kd), netKd: num(r.net_kd),
+    quietRun: 0,
+  }));
+
+  const stocks = {};
+  for (const c of contracts) {
+    const st = stocks[c.symbol] || { symbol: c.symbol, status: 'WATCH', contractSeq: 0,
+      failedSetups: 0, realisedKd: 0, lastSell: null, banUntilMinute: null, blockedReason: null };
+    st.contractSeq = Math.max(st.contractSeq, c.seq);
+    if (c.netKd != null) {
+      st.realisedKd = S.round2(st.realisedKd + c.netKd);
+      if (c.netKd < 0) st.failedSetups += 1;
+    }
+    if (st.realisedKd <= cfg.RISK.perStockMaxLossKd) { st.status = 'BLOCKED'; st.blockedReason = `loss_limit ${st.realisedKd} KD`; }
+    else if (st.failedSetups >= cfg.RISK.maxFailedSetups) { st.status = 'BLOCKED'; st.blockedReason = `${st.failedSetups} failed setups`; }
+    stocks[c.symbol] = st;
+  }
+
+  const spent = contracts.filter((c) => c.status === 'HOLDING' || c.status === 'PENDING_SELL')
+    .reduce((a, c) => a + ((c.buyPrice || 0) * (c.shares || 0)) / 1000, 0);
+  const realised = contracts.reduce((a, c) => a + (c.netKd || 0), 0);
+  const budgetKd = cfg.BUDGET.defaultKd;
+  const reserveKd = S.round2(budgetKd * cfg.BUDGET.reservePct);
+
+  const state = { tradingDay, budgetKd, reserveKd,
+    deployableKd: S.round2(budgetKd - reserveKd),
+    cashKd: S.round2(budgetKd - reserveKd - spent),
+    stocks, contracts, nextContractId: contracts.length + 1,
+    realisedKd: S.round2(realised),
+    commissionKd: S.round2(contracts.reduce((a, c) => a + (c.commissionKd || 0), 0)),
+    log: [] };
+
+  const view = buildView({ state, cfg, version, lastFrame: { symbols: {} } });
+  view.recorded = true;                 // these are real fills, not a simulation
+  view.mode = rows[0].mode || cfg.MODE;
+  view.tradingDay = tradingDay;
+  return view;
+}
+
+const num = (v) => (v == null ? null : Number(v));
+
+/*
  * replayDay — reconstruct a FINISHED day by running the whole session through the same
  * engine, minute by minute.
  *
@@ -291,4 +357,4 @@ function currentView(tradingDay = kuwaitDay()) {
 
 module.exports = { runTick, confirmFill, setBudget, currentView, buildLiveFrame,
   kuwaitDay, sessionMinute, getConfig, stateFor,
-  replayDay, isLiveSession, SESSION_MINUTES };
+  replayDay, loadRecordedDay, isLiveSession, SESSION_MINUTES };
