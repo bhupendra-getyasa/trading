@@ -77,6 +77,19 @@ async function start() {
     { timezone: 'Asia/Kuwait' }
   );
 
+  cron.schedule(
+    '5 13 * * 0-4',
+    async () => {
+      try {
+        await closeScraper();
+        console.log('closed browser');
+      } catch (err) {
+        console.error(`[${new Date().toISOString()}] Failed to schedule watchlist scrape:`, err.message);
+      }
+    },
+    { timezone: 'Asia/Kuwait' }
+  );
+
   // ─── Daily at 8:30 PM: history score ─────────────────────────────────────────
   cron.schedule(
     '30 08 * * 0-4',
