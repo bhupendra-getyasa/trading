@@ -13,7 +13,19 @@
  * auto_target_fils, fib_win_pct, tradable_bull_swings, largest_bull_swing,
  * and a market cap column (adjust DAILY_TABLE / column names to your schema).
  */
-const { classifyProfile, classifyLane, classifyTrend, CLASSIFY } = require('../classification');
+const { classifyProfile, classifyLane, classifyTrend, commissionFilsFor, CLASSIFY } = require('../classification');
+const CFG = require('../config');
+
+// 27-Jul: commission is PRICE-DEPENDENT. The old `- CLASSIFY.commissionFils` applied a
+// flat 2 fils/share to every stock, which overcharged everything below 667 fils and
+// undercharged above it. That flat number also drove the MARGINAL test, so cheap
+// stocks were rejected for a cost they never paid. Cost now comes from commission.js.
+//
+// SEGMENT: the daily metrics table carries no market column, so classification uses
+// the MAIN Market rate (our universe, and the conservative choice — Main is 15 bps
+// against Premier's 10 bps until 01-Oct-2026). If a market column is added to the
+// daily table, pass it through as `market` here and the rate becomes exact.
+const CLASSIFY_MARKET = process.env.CLASSIFY_MARKET || 'Main Market';
 
 const DAILY_TABLE = process.env.DAILY_TABLE || 'public.stock_prices_daily';
 const CLASS_TABLE = process.env.CLASSIFICATION_TABLE || 'public.stock_classification';
@@ -71,11 +83,15 @@ async function runClassificationStep(pool, { now = Date.now() } = {}) {
     const m3 = { price: num(r.price_3m), volume: num(r.volume_3m), target: num(r.target_3m), win: num(r.win_3m), tradableSwings: num(r.tsw_3m), hit3: num(r.hit3_3m), hit5: num(r.hit5_3m) };
     const m1 = { price: num(r.price_3m), volume: num(r.volume_1m), target: num(r.target_1m), win: num(r.win_1m), tradableSwings: num(r.tsw_1m), hit3: num(r.hit3_1m), hit5: num(r.hit5_1m) };
     if (m3.price == null) continue;
-    const profile = classifyProfile(m3);
-    const profile1m = classifyProfile(m1);
+    const costOpts = { cfg: CFG.COMMISSION, market: CLASSIFY_MARKET, day };
+    const profile = classifyProfile(m3, CLASSIFY, costOpts);
+    const profile1m = classifyProfile(m1, CLASSIFY, costOpts);
     const lane = classifyLane(profile, m3.volume);
     const trend = classifyTrend(profile, profile1m);
-    const net = (m3.target ?? 0) - CLASSIFY.commissionFils;
+    const commFils = commissionFilsFor(m3.price, {
+      cfg: CFG.COMMISSION, market: CLASSIFY_MARKET, day,
+    });
+    const net = (m3.target ?? 0) - commFils;
     const band = bandOf(m3.price);
 
     await pool.query(

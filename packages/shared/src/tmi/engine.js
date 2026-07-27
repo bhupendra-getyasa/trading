@@ -1,4 +1,6 @@
 'use strict';
+const COMMISSION = require('../live-engine/commission');
+const LIVE_COMMISSION = require('../live-engine/config').COMMISSION;
 /*
  * engine.js — TMI's per-minute tick. PURE: same input, same output, no IO, no clock.
  *
@@ -34,12 +36,15 @@ const S = require('./state');
 const R = require('./rules');
 const D = require('./decision');
 
-function commissionKd(price, shares, cfg) {
+// 27-Jul: one side of a trade, via commission.js. Was an inline percentage that
+// missed the settlement fee and the per-segment rate, and could never switch on
+// 01-Oct-2026. `opts` carries { market, day } for accurate historical costing.
+function commissionKd(price, shares, cfg, opts = {}) {
   const tradeKd = (price * shares) / 1000;
-  return Math.max(cfg.minKdPerSide ?? 0.5, (cfg.pctPerSide ?? 0.0015) * tradeKd);
+  return COMMISSION.perSideKd(tradeKd, { cfg, market: opts.market, day: opts.day });
 }
 
-function tick(state, frame, config, commissionCfg = { pctPerSide: 0.0015, minKdPerSide: 0.5 }) {
+function tick(state, frame, config, commissionCfg = LIVE_COMMISSION) {
   const actions = [];
   let st = state;
   const paper = config.MODE === 'paper';

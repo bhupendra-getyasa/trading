@@ -14,17 +14,30 @@
  *   ILLIQUID-CAP  : min lot exceeds the exit-safety volume cap (can't exit cleanly)
  */
 const U = require('./lib/util');
+const COMMISSION = require('./commission');
 
-function commissionFilsPerShare(shares, price, cfg) {
-  if (cfg.mode === 'fixed') return cfg.filsPerShare;
-  // percentage per side with a KD minimum; price in fils -> trade value in KD = shares*price/1000
-  const tradeKd = (shares * price) / 1000;
-  const perSideKd = Math.max(cfg.minKdPerSide, cfg.pctPerSide * tradeKd);
-  const roundTripKd = 2 * perSideKd;
-  return (roundTripKd * 1000) / shares;   // -> fils per share
+/*
+ * Round-trip commission in fils/share.
+ *
+ * 27-Jul: delegated to commission.js. The old inline version was correct on the
+ * percentage and minimum but missed two things that changed every cost number:
+ *   1. the 0.500 KD settlement fee charged on every executed order over 50 KD
+ *      (abolished 01-Oct-2026), and
+ *   2. the per-segment rate — Main Market is 15 bps, Premier is 10 bps until
+ *      01-Oct-2026, after which both are 15.
+ * Costing a historical day with today's rate silently corrupts every backtest
+ * spanning the change, so pass `day` whenever replaying.
+ *
+ * @param {object} [opts] { market, day } — market defaults to Main (conservative).
+ */
+function commissionFilsPerShare(shares, price, cfg, opts = {}) {
+  return COMMISSION.roundTripFilsPerShare(shares, price, {
+    cfg, market: opts.market, day: opts.day,
+  });
 }
 
-function suggest({ profile, price, volume, avgVolume, tradableSwings, targetFils, lane, book }, budgetKd, sizingCfg, commissionCfg) {
+function suggest({ profile, price, volume, avgVolume, tradableSwings, targetFils, lane, book, market, day }, budgetKd, sizingCfg, commissionCfg) {
+  const costOpts = { market, day };
   const risk = sizingCfg.riskPctByProfile[profile] ?? 0.05;
   const est_roundtrips = Math.max(1, Math.round(tradableSwings ?? 1));   // estimation only (revolving = TMI's job)
   // FIX: a missing budget must never delete the risk cap (that silently sized to the exit cap)
@@ -51,7 +64,7 @@ function suggest({ profile, price, volume, avgVolume, tradableSwings, targetFils
     const raw = Math.min(sizingCfg.wildMaxShares, sharesByVolume, sharesByBudget);
     let shares = Math.floor(raw / sizingCfg.wildLotSize) * sizingCfg.wildLotSize;
     if (shares < sizingCfg.wildLotSize) shares = sizingCfg.wildLotSize;
-    const comm = U.round2(commissionFilsPerShare(shares, price, commissionCfg));
+    const comm = U.round2(commissionFilsPerShare(shares, price, commissionCfg, costOpts));
     return { suggested_shares: shares, est_roundtrips, kd_needed: U.round1((shares * price) / 1000),
       commission_fils_per_share: comm, tag: (targetFils ?? 0) > comm ? 'ILLIQUID-TINY' : 'TOO-EXPENSIVE',
       shares_by_volume_cap: Math.round(sharesByVolumeCap), shares_by_book_cap: sharesByBookCap != null ? Math.round(sharesByBookCap) : null,
@@ -61,7 +74,7 @@ function suggest({ profile, price, volume, avgVolume, tradableSwings, targetFils
   const shares = toLot(Math.min(sharesByBudget, sharesByVolume));  // clean size within all caps
 
   let shownShares = shares > 0 ? shares : sizingCfg.minLot;
-  const commPerShare = U.round2(commissionFilsPerShare(shownShares, price, commissionCfg));
+  const commPerShare = U.round2(commissionFilsPerShare(shownShares, price, commissionCfg, costOpts));
   const clearsCommission = (targetFils ?? 0) > commPerShare;
   let tag = 'TRADABLE';
   if (!clearsCommission) {

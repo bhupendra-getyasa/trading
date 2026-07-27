@@ -15,12 +15,46 @@ module.exports = {
   WINDOW:  { snapshots: 20 },           // how many recent 1-min snapshots to analyse
   ELIGIBILITY: { stalenessMin: 5 },     // ignore symbols with no fresh snapshot
 
-  // ---- Commission: real KSE formula, configurable per broker --------------
+  // ---- Commission: real KSE formula, DATE-SCHEDULED per market segment -----
+  // Read ONLY through packages/shared/src/live-engine/commission.js. Nothing may
+  // hard-code a rate. A cost for date D must use the schedule active on date D,
+  // otherwise every backtest spanning 01-Oct-2026 is silently wrong.
+  //
+  // Source: Boursa Kuwait disclosure 23-Jul-2026 (CMA approved), effective 01-Oct-2026.
+  // Main Market is our universe: the RATE DOES NOT CHANGE (15 bps both sides of the
+  // date). What changes is the 0.500 KD settlement fee being abolished, which makes
+  // October CHEAPER at every size.
+  //
+  // NOTE ON filsPerShare: only ever used when mode === 'fixed'. It is NOT the real
+  // model and must never leak into classification (that was the flat-2-fil bug).
   COMMISSION: {
-    mode: 'percentage',        // 'percentage' (real KSE) | 'fixed'
-    pctPerSide: 0.0015,        // 0.15% of trade value per side
-    minKdPerSide: 0.5,         // 0.5 KD minimum per side
-    filsPerShare: 2,           // used only when mode = 'fixed'
+    referenceNotionalKd: 500,   // notional used to price a stock we are only classifying
+    schedule: [
+      {
+        id: 'pre-oct-2026',
+        effectiveFrom: null,           // open-ended start
+        effectiveTo: '2026-09-30',
+        mode: 'percentage',            // 'percentage' (real KSE) | 'fixed'
+        bpsBySegment: { PREMIER: 10, MAIN: 15, FUND: 10 },
+        minKdPerSide: 0.250,
+        minAppliesBelowKd: null,       // minimum applies at any size in this regime
+        settlementKdPerOrder: 0.500,   // per EXECUTED ORDER over the threshold
+        settlementAppliesAboveKd: 50,
+        filsPerShare: 2,               // ONLY if mode === 'fixed'
+      },
+      {
+        id: 'post-oct-2026',
+        effectiveFrom: '2026-10-01',
+        effectiveTo: null,             // open-ended end
+        mode: 'percentage',
+        bpsBySegment: { PREMIER: 15, MAIN: 15, FUND: 15 },
+        minKdPerSide: 0.500,
+        minAppliesBelowKd: 333.33,     // minimum only bites on trades <= this
+        settlementKdPerOrder: 0,       // ABOLISHED
+        settlementAppliesAboveKd: 0,
+        filsPerShare: 2,
+      },
+    ],
   },
 
   // ---- Swing / Fibonacci detection (Gate 1) — PROVISIONAL, tune with tick data
@@ -45,12 +79,16 @@ module.exports = {
   // ---- Order-book liquidity (Gate 1b) — reads public.stock_quotes -------------
   // Answers "can we actually TRADE this right now?", which price+volume cannot.
   // MEASURE ALWAYS, BLOCK OPTIONALLY: metrics are computed and stored on every
-  // symbol every cycle whatever the mode. Ships in 'warn' so we accumulate real
-  // evidence for these thresholds WITHOUT changing selection behaviour; flip to
-  // 'gate' only once the replay harness shows the numbers hold.
+  // symbol every cycle whatever the mode.
+  //
+  // 27-Jul: flipped 'warn' -> 'gate'. It shipped in 'warn' to accumulate evidence
+  // without changing behaviour. The evidence arrived and it is unambiguous: on
+  // 26-Jul, IFAHR (150 KD median bid depth) and FTI (547 KD) both sat in the live
+  // watchlist all session. Neither could have been exited at size. The gate was
+  // measuring correctly and being ignored — that is worse than not measuring.
   LIQUIDITY: {
     enabled: true,
-    mode: 'warn',                // 'warn' = record only | 'gate' = also block the radar
+    mode: 'gate',                // 'warn' = record only | 'gate' = also block the radar
     window: 20,                  // quote rows per symbol per cycle (matches WINDOW.snapshots)
     quoteStalenessMin: 5,        // newest quote older than this -> unknown, fail OPEN
     minSamples: 5,               // fewer rows than this -> unknown, fail OPEN
@@ -101,6 +139,36 @@ module.exports = {
     { maxBudgetKd: 3500, suggestBands: ['Penny', 'Low', 'Medium', 'Upper Medium'] },
     { maxBudgetKd: Infinity, suggestBands: ['Penny', 'Low', 'Medium', 'Upper Medium', 'High', 'Premium'] },
   ],
+
+  // ---- TRADING: budget & how many stocks (USER-EDITABLE, no deploy) ----------
+  // Both values are set by the user in the front end and may change often
+  // (500 KD single-stock R&D one week, 5000 KD across several the next).
+  // Nothing downstream may hard-code either.
+  //
+  // THE SLOT FLOOR IS NOT A PREFERENCE — IT IS ARITHMETIC.
+  // Commission has a fixed component (the KD minimum, plus the 0.500 settlement
+  // fee until 01-Oct). Split a budget too many ways and that fixed cost exceeds
+  // the spread you are trying to capture. Measured on a 150f stock, 1-fil spread:
+  //
+  //   slot 250 KD  ->  1,600 sh  ->  cost 1.72 KD  ->  net -0.12  (LOSS)
+  //   slot 500 KD  ->  3,300 sh  ->  cost 2.49 KD  ->  net +0.81
+  //   slot 1000 KD ->  6,600 sh  ->  cost 3.97 KD  ->  net +2.63
+  //   slot 2500 KD -> 16,600 sh  ->  cost 8.47 KD  ->  net +8.13
+  //
+  // Max stocks by budget (current regime; roughly DOUBLES from 01-Oct when the
+  // settlement fee dies and the floor drops to ~350 KD):
+  //   500 KD -> 1 | 1000 -> 2 | 2000 -> 4 | 3000 -> 6 | 5000 -> 10
+  TRADING: {
+    budgetKd: 5000,              // user-set: 500 .. 50000
+    maxStocks: 2,                // user-set: 1 .. 10
+    minSlotKd: null,             // null = derive from the active commission schedule
+    minSlotKdByRegime: { 'pre-oct-2026': 500, 'post-oct-2026': 350 },
+    minNetPerRoundTripKd: 1.0,   // reject any stock that cannot clear this at THIS slot size
+    // Validation is enforced in code, not documentation: if budgetKd / maxStocks
+    // falls below the floor the call must FAIL LOUDLY with the max supported count,
+    // never silently size down into a losing trade.
+    enforceSlotFloor: true,
+  },
 
   // ---- Budget allocation across qualified stocks (Option B) ------------------
   PORTFOLIO: { rankBy: 'est_profit_kd' },   // est_profit_kd | net_fils | swing1_fils

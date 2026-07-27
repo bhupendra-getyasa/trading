@@ -1,4 +1,5 @@
 'use strict';
+const COMMISSION = require('../live-engine/commission');
 /*
  * decision.js — the standard strategy. Two questions, always asked in this order:
  *
@@ -28,11 +29,16 @@ const LIVE = require('../live-engine/config');
 
 /* commission cost of a round trip, expressed in FILS PER SHARE so it can be compared
  * directly against an expected move. This is the number every edge must clear. */
-function roundTripFils(price, shares, commissionCfg = LIVE.COMMISSION) {
+function roundTripFils(price, shares, commissionCfg = LIVE.COMMISSION, opts = {}) {
   if (!price || !shares) return Infinity;
-  const perSide = Math.max(commissionCfg.minKdPerSide ?? 0.5,
-    (commissionCfg.pctPerSide ?? 0.0015) * (price * shares) / 1000);
-  return (2 * perSide * 1000) / shares;
+  // 27-Jul: routed through commission.js. The inline version silently defaulted to
+  // 0.15%/0.5 KD and missed the 0.500 KD settlement fee charged on every executed
+  // order over 50 KD (abolished 01-Oct-2026) as well as the Premier/Main rate split.
+  // Pass { market, day } when replaying so historical days are costed on the schedule
+  // that was actually in force.
+  return COMMISSION.roundTripFilsPerShare(shares, price, {
+    cfg: commissionCfg, market: opts.market, day: opts.day,
+  });
 }
 
 /*

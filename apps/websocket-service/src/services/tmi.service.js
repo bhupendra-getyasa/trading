@@ -156,7 +156,11 @@ function isLiveSession(day, now = Date.now()) {
  */
 async function loadRecordedDay(tradingDay) {
   const rows = await repo.loadContracts(tradingDay);
-  if (!rows.length) return null;
+  const savedCandidates = await repo.loadCandidates(tradingDay).catch(() => ({}));
+  // A day with a watchlist but no trades is still a day worth reviewing — arguably the
+  // most interesting kind, since it shows what qualified and was never acted on. So the
+  // early return must consider both, not just contracts.
+  if (!rows.length && !Object.keys(savedCandidates).length) return null;
   const { version, cfg } = await getConfig();
 
   const contracts = rows.map((r) => ({
@@ -197,11 +201,14 @@ async function loadRecordedDay(tradingDay) {
     stocks, contracts, nextContractId: contracts.length + 1,
     realisedKd: S.round2(realised),
     commissionKd: S.round2(contracts.reduce((a, c) => a + (c.commissionKd || 0), 0)),
-    log: [] };
+    log: [],
+    // The recorded watchlist, so a past day shows what was being watched — not just
+    // what was traded. On most days those are very different lists.
+    candidates: savedCandidates };
 
   const view = buildView({ state, cfg, version, lastFrame: { symbols: {} } });
   view.recorded = true;                 // these are real fills, not a simulation
-  view.mode = rows[0].mode || cfg.MODE;
+  view.mode = (rows[0] && rows[0].mode) || cfg.MODE;
   view.tradingDay = tradingDay;
   return view;
 }
@@ -239,6 +246,15 @@ async function stateFor(tradingDay) {
   if (d) return d;
   const { version, cfg } = await getConfig();
   d = { state: S.createState({ tradingDay, budgetKd: cfg.BUDGET.defaultKd, config: cfg }), cfg, version };
+
+  // Rebuild the day's watchlist from the database. Without this a restart mid-session
+  // silently emptied the watching zone, and yesterday's list could never be opened at
+  // all — the two cases a watchlist most needs to survive.
+  try {
+    const saved = await repo.loadCandidates(tradingDay);
+    if (saved && Object.keys(saved).length) d.state = { ...d.state, candidates: saved };
+  } catch (e) { console.warn('[tmi] candidate restore', e.message); }
+
   days.set(tradingDay, d);
   return d;
 }
@@ -252,6 +268,26 @@ async function runTick(tradingDay = kuwaitDay()) {
   const out = TMI.tick(d.state, frame, d.cfg, LIVE.COMMISSION);
   d.state = out.state;
   d.lastFrame = frame;
+
+  // Record THIS tick's qualified symbols into the day's candidate list. The list is
+  // append-only: a symbol that qualified at 09:15 stays on the watching zone for the
+  // rest of the session even if it never qualifies again. Before this, the zone was
+  // rebuilt from the current frame alone, so candidates disappeared during any quiet
+  // minute and the zone was empty after the close on a day with ten qualified stocks.
+  {
+    const seen = new Set();
+    for (const [sym, snap] of Object.entries(frame.symbols || {})) {
+      if (!snap.radarQualified) continue;
+      if (!snap.nominated && !snap.entrySignal) continue;
+      seen.add(sym);
+      d.state = S.noteCandidate(d.state, sym, snap, minute);
+    }
+    d.state = S.ageCandidates(d.state, seen, minute);
+    // Persist every tick. The watchlist is the record of what the engine showed you
+    // that day, so it has to outlive the process, not just the session.
+    try { await repo.upsertCandidates(d.state.candidates, tradingDay); }
+    catch (e) { console.warn('[tmi] candidate persist', e.message); }
+  }
 
   for (const c of d.state.contracts) {
     try { await repo.upsertContract(c, tradingDay, d.cfg.MODE, d.version); } catch (e) { console.warn('[tmi] contract persist', e.message); }
@@ -292,16 +328,36 @@ function buildView(d) {
     else zones.exited.push(row);
   }
 
-  // watching = qualified, liquid, no open contract, not blocked
-  for (const [sym, s] of Object.entries(f.symbols)) {
-    if (openSyms.has(sym)) continue;
-    if (!s.radarQualified) continue;
-    const stock = st.stocks[sym];
+  // WATCHING = everything that qualified at any point TODAY and has no open contract.
+  //
+  // Built from st.candidates (the day's accumulated list), NOT from the current frame.
+  // A candidate found in the morning stays visible all session — that is the whole
+  // point of a watchlist. Live quote fields are overlaid from the current frame when
+  // the symbol is still ticking; when it is not, the last known values are shown and
+  // `live: false` lets the UI grey the row rather than drop it.
+  //
+  // Ordering: still-qualifying rows first, then most recently seen, so the top of the
+  // zone is always what is actionable now without losing the rest of the day.
+  const cands = Object.values(st.candidates || {});
+  cands.sort((a, b) => (b.live === a.live ? (b.lastMinute - a.lastMinute) : (b.live ? 1 : -1)));
+  for (const c of cands) {
+    if (openSyms.has(c.symbol)) continue;
+    const stock = st.stocks[c.symbol];
     if (stock && stock.status === 'BLOCKED') continue;
-    if (!s.nominated && !s.entrySignal) continue;
-    zones.watching.push({ symbol: sym, price: s.price, book: s.book,
-      swing: s.swing || null, reason: s.entryReason || 'watching for setup',
-      blocked: false, classification: s.classification });
+    const now = f.symbols[c.symbol] || {};
+    zones.watching.push({
+      symbol: c.symbol,
+      price: now.price ?? c.price,
+      book: now.book ?? c.book,
+      swing: now.swing ?? c.swing ?? null,
+      reason: c.live ? (now.entryReason || c.reason) : (c.reason || 'watched earlier today'),
+      classification: now.classification ?? c.classification,
+      blocked: false,
+      live: !!c.live,               // still qualifying on this tick
+      firstMinute: c.firstMinute,   // when it first appeared today
+      lastMinute: c.lastMinute,     // when it last qualified
+      seenCount: c.seenCount,       // how many ticks it has qualified on
+    });
   }
 
   const closed = st.contracts.filter((c) => c.status === 'CLOSED' && c.netKd != null);

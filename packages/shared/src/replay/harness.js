@@ -1,4 +1,5 @@
 'use strict';
+const COMMISSION = require('../live-engine/commission');
 /*
  * harness.js — walk-forward replay. Feeds a stored session through the REAL TMI
  * tick(), one minute at a time, with no access to anything after the current minute.
@@ -214,8 +215,12 @@ function runWakeup(rawSession, config, commissionCfg = { pctPerSide: 0.0015, min
     // Each side is charged on ITS OWN value. Doubling the buy-side figure understates
     // the cost of a winning trade, because the sell side is worth more than the buy
     // side when the price has risen - i.e. it flatters exactly the trades we care about.
-    const side = (px) => Math.max(commissionCfg.minKdPerSide ?? 0.5,
-      (commissionCfg.pctPerSide ?? 0.0015) * (px * shares) / 1000);
+    // 27-Jul: via commission.js so a replayed day is costed on the schedule that was
+    // in force THAT day, not today's. Without this every backtest spanning 01-Oct-2026
+    // is silently wrong, and every pre-Oct day omits the 0.500 KD settlement fee.
+    const side = (px) => COMMISSION.perSideKd((px * shares) / 1000, {
+      cfg: commissionCfg, market: p.market, day: p.tradingDay || tradingDay,
+    });
     const comm = side(buy) + side(sell);
     trades.push({ symbol: p.symbol, buy, sell, shares,
       buyMinute: entry.minute, sellMinute: out.minute,

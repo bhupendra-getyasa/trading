@@ -1,4 +1,5 @@
 'use strict';
+const COMMISSION = require('../live-engine/commission');
 /*
  * detector.js — the WAKE-UP DETECTOR.
  *
@@ -68,7 +69,7 @@ function median(a) {
  * Reads nothing beyond the rows it is given, so the caller controls the as-of time
  * and no future data can leak in.
  */
-function measure(rows, cfg, commissionCfg) {
+function measure(rows, cfg, commissionCfg, opts = {}) {
   const w = rows.filter((r) => r.price > 0 && r.raw && r.raw.bid > 0 && r.raw.offer > 0);
   if (w.length < (cfg.minSamples ?? 15)) return null;
 
@@ -90,7 +91,19 @@ function measure(rows, cfg, commissionCfg) {
   const tr = w.map((r) => r.raw.trades).filter((x) => x != null);
   const trades = tr.length ? Math.max(...tr) - Math.min(...tr) : 0;
 
-  const commPct = 2 * ((commissionCfg.pctPerSide ?? 0.0015) * 100);   // both sides
+  // 27-Jul: commission as a % of notional, from commission.js rather than a hard
+  // 0.15%. This matters more than it looks: at small sizes the KD minimum and the
+  // 0.500 KD settlement fee dominate, so a flat percentage understates cost on
+  // exactly the cheap stocks rangeOverCost is meant to rank. Costed at a reference
+  // notional because no share count exists yet at measure time — pass
+  // opts.notionalKd (the real slot size) whenever the caller knows it.
+  const notionalKd = opts.notionalKd
+    ?? commissionCfg.referenceNotionalKd
+    ?? 500;
+  const rtKd = COMMISSION.roundTripKd(notionalKd, {
+    cfg: commissionCfg, market: opts.market, day: opts.day,
+  });
+  const commPct = 100 * (rtKd / notionalKd);
   const costPct = (100 * spreadFils / now) + commPct;
   const rangePct = 100 * rangeFils / open;
 
@@ -130,10 +143,10 @@ function verdict(m, cfg) {
  * the thresholds have to be validated against, and "why didn't it pick X?" is only
  * answerable if X was recorded.
  */
-function scan(symbols, cfg, commissionCfg) {
+function scan(symbols, cfg, commissionCfg, opts = {}) {
   const out = [];
   for (const [sym, rows] of Object.entries(symbols)) {
-    const m = measure(rows, cfg, commissionCfg);
+    const m = measure(rows, cfg, commissionCfg, opts);
     const v = verdict(m, cfg);
     out.push({ symbol: sym, ...(m || {}), pass: v.pass, reason: v.reason });
   }

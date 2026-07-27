@@ -47,7 +47,59 @@ function createState({ tradingDay, budgetKd, config }) {
     realisedKd: 0,
     commissionKd: 0,
     log: [],           // append-only, timestamped; this is the audit trail
+
+    // THE DAY'S CANDIDATE LIST — every symbol that qualified at ANY point today,
+    // kept for the whole session and never pruned.
+    //
+    // 27-Jul: the watching zone used to be rebuilt from the CURRENT frame only, so a
+    // stock nominated at 09:15 stayed on screen only while it kept being re-nominated
+    // on every single tick. One quiet minute and it vanished; after the close the zone
+    // was empty even on a day with ten qualified stocks. That made the screen a
+    // snapshot of this instant rather than a record of the session, and a candidate
+    // you looked at in the morning could not be found again in the afternoon.
+    //
+    // symbol -> { symbol, firstMinute, lastMinute, price, book, swing, reason,
+    //             classification, seenCount, live }
+    candidates: {},
   };
+}
+
+/*
+ * noteCandidate — record (or refresh) a symbol that qualified this tick.
+ * Append-only within the day: once a symbol is in here it stays, and later ticks
+ * only update its live fields. `live` flags whether it qualified on THIS tick, so
+ * the UI can distinguish "still qualifying" from "qualified earlier today".
+ */
+function noteCandidate(state, symbol, snap, minute) {
+  const prev = state.candidates[symbol];
+  const next = {
+    symbol,
+    firstMinute: prev ? prev.firstMinute : minute,
+    lastMinute: minute,
+    seenCount: (prev ? prev.seenCount : 0) + 1,
+    price: snap.price ?? (prev ? prev.price : null),
+    book: snap.book ?? (prev ? prev.book : null),
+    swing: snap.swing ?? (prev ? prev.swing : null),
+    reason: snap.entryReason || (prev ? prev.reason : 'watching for setup'),
+    classification: snap.classification ?? (prev ? prev.classification : null),
+    live: true,
+  };
+  return { ...state, candidates: { ...state.candidates, [symbol]: next } };
+}
+
+/*
+ * ageCandidates — mark everything not seen this tick as no longer live.
+ * They REMAIN in the list; only the flag changes. Nothing is ever removed.
+ */
+function ageCandidates(state, seenThisTick, minute) {
+  let changed = false;
+  const out = {};
+  for (const [sym, c] of Object.entries(state.candidates)) {
+    const live = seenThisTick.has(sym);
+    if (c.live !== live) changed = true;
+    out[sym] = c.live === live ? c : { ...c, live };
+  }
+  return changed ? { ...state, candidates: out } : state;
 }
 
 function ensureStock(state, symbol) {
@@ -137,4 +189,5 @@ function zoneOf(contract) {
 const round2 = (n) => Math.round(n * 100) / 100;
 
 module.exports = { STOCK, CONTRACT, ZONE, createState, ensureStock, openContract,
-  updateContract, openContractFor, blockStock, appendLog, zoneOf, round2 };
+  updateContract, openContractFor, blockStock, appendLog, zoneOf, round2,
+  noteCandidate, ageCandidates };

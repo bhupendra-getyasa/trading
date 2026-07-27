@@ -78,7 +78,38 @@ async function start() {
   );
 
   cron.schedule(
-    '5 13 * * 0-4',
+    '0-10 13 * * 0-4',
+    // '* * * * *',
+    async () => {
+      try {
+        // Overrun guard: never queue on top of a scan that's still running/waiting.
+        const [active, waiting] = await Promise.all([
+          watchlistQueue.getActiveCount(),
+          watchlistQueue.getWaitingCount(),
+        ]);
+        if (active > 0 || waiting > 0) {
+          console.log(`[${new Date().toISOString()}] Watchlist scrape still pending (active=${active}, waiting=${waiting}) — skipping`);
+          return;
+        }
+ 
+        await watchlistQueue.add(
+          'watchlist-job',
+          {},
+          {
+            removeOnComplete: true,
+            removeOnFail: true,
+            attempts: 1
+          }
+        );
+      } catch (err) {
+        console.error(`[${new Date().toISOString()}] Failed to schedule watchlist scrape:`, err.message);
+      }
+    },
+    { timezone: 'Asia/Kuwait' }
+  );
+
+  cron.schedule(
+    '15 13 * * 0-4',
     async () => {
       try {
         await closeScraper();

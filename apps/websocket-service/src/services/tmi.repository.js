@@ -53,6 +53,23 @@ CREATE TABLE IF NOT EXISTS public.tmi_actions (
 CREATE INDEX IF NOT EXISTS tmi_actions_day_idx ON public.tmi_actions (trading_day, ts);
 CREATE INDEX IF NOT EXISTS tmi_actions_sym_idx ON public.tmi_actions (symbol, trading_day);
 
+CREATE TABLE IF NOT EXISTS public.tmi_candidates (
+  trading_day date NOT NULL,
+  symbol text NOT NULL,
+  first_minute int,                      -- when it FIRST qualified today
+  last_minute int,                       -- when it LAST qualified today
+  seen_count int NOT NULL DEFAULT 1,     -- how many ticks it qualified on
+  price numeric,                         -- last known
+  book jsonb,                            -- last known depth/spread/trades-per-min
+  swing jsonb,
+  reason text,
+  classification jsonb,
+  live boolean NOT NULL DEFAULT true,    -- was it still qualifying at the last tick
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (trading_day, symbol));
+CREATE INDEX IF NOT EXISTS tmi_candidates_day_idx ON public.tmi_candidates (trading_day, last_minute DESC);
+
 CREATE TABLE IF NOT EXISTS public.tmi_config (
   version bigserial PRIMARY KEY,
   config jsonb NOT NULL,
@@ -204,5 +221,64 @@ async function loadActions(tradingDay, { symbol, limit = 2000 } = {}, db = pool)
   return rows;
 }
 
+/*
+ * upsertCandidates — persist the day's watchlist.
+ *
+ * The watchlist is not scratch state. It is the record of what the engine put in
+ * front of you on a given day, and it has to be reviewable after the session, after
+ * a restart, and months later when asking "what did we see that morning?".
+ *
+ * Held only in memory it survived neither a restart nor a look at yesterday, which
+ * is exactly what a watchlist is for. Keyed (trading_day, symbol) so a tick is
+ * idempotent; first_minute is never overwritten, so the moment a stock first
+ * appeared is preserved even as everything else is refreshed.
+ */
+async function upsertCandidates(candidates, tradingDay, db = pool) {
+  const list = Array.isArray(candidates) ? candidates : Object.values(candidates || {});
+  if (!list.length) return 0;
+  await ensure(db);
+  let n = 0;
+  for (const c of list) {
+    await db.query(
+      `INSERT INTO public.tmi_candidates
+        (trading_day,symbol,first_minute,last_minute,seen_count,price,book,swing,reason,classification,live)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       ON CONFLICT (trading_day, symbol) DO UPDATE SET
+         last_minute=EXCLUDED.last_minute, seen_count=EXCLUDED.seen_count,
+         price=COALESCE(EXCLUDED.price, public.tmi_candidates.price),
+         book=COALESCE(EXCLUDED.book, public.tmi_candidates.book),
+         swing=COALESCE(EXCLUDED.swing, public.tmi_candidates.swing),
+         reason=EXCLUDED.reason, classification=COALESCE(EXCLUDED.classification, public.tmi_candidates.classification),
+         live=EXCLUDED.live, updated_at=now();`,
+      [tradingDay, c.symbol, c.firstMinute ?? null, c.lastMinute ?? null, c.seenCount ?? 1,
+       c.price ?? null, c.book ? JSON.stringify(c.book) : null,
+       c.swing ? JSON.stringify(c.swing) : null, c.reason ?? null,
+       c.classification ? JSON.stringify(c.classification) : null, c.live !== false]);
+    n++;
+  }
+  return n;
+}
+
+/* loadCandidates — rebuild the day's watchlist. Used on restart AND to review a past day. */
+async function loadCandidates(tradingDay, db = pool) {
+  await ensure(db);
+  const { rows } = await db.query(
+    `SELECT * FROM public.tmi_candidates WHERE trading_day::text = $1
+      ORDER BY live DESC, last_minute DESC, symbol;`,
+    [String(tradingDay)]);
+  const out = {};
+  for (const r of rows) {
+    out[r.symbol] = {
+      symbol: r.symbol,
+      firstMinute: r.first_minute, lastMinute: r.last_minute,
+      seenCount: r.seen_count, price: r.price == null ? null : Number(r.price),
+      book: r.book || null, swing: r.swing || null, reason: r.reason,
+      classification: r.classification || null, live: r.live,
+    };
+  }
+  return out;
+}
+
 module.exports = { DDL, ensure, activeConfig, saveConfig, configHistory,
+  upsertCandidates, loadCandidates,
   upsertContract, loadContracts, diagnoseContracts, logAction, logActions, loadActions };

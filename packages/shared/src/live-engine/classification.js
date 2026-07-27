@@ -12,8 +12,22 @@
  * Input `m` = median metrics for a window:
  *   { price, volume, target, win, tradableSwings, hit3, hit5 }
  */
+const COMMISSION = require('./commission');
+
 const CLASSIFY = {
-  commissionFils: 2,            // round-trip fils/share (matches config.COMMISSION.filsPerShare)
+  // commissionFils REMOVED (27-Jul). It was a flat 2 fils/share applied to every
+  // stock regardless of price, and it was used in THREE places: net_fils, the
+  // MARGINAL test, and the SWING test. Real KSE commission is a PERCENTAGE, so
+  // true cost is ~0.003 x price fils/share. Break-even is 667 fils — below that
+  // the flat model overcharged (6.7x too harsh at 100f), above it undercharged.
+  //
+  // The damage was not cosmetic. `target < 2` returned MARGINAL, so cheap stocks
+  // were rejected for a cost they never paid. On 26-Jul that rejected KFIC
+  // (133f, real commission 0.40f) and KHOT (212f, real 0.64f). KHOT was the best
+  // available trade of the day. 44% of all stock-days sat pinned at the 2f floor.
+  //
+  // Cost now comes from commission.js, which is price-, segment- and date-aware.
+  // Pass a `costFn` into classifyProfile to override it (tests, replay).
   deadHit3: 20,                 // Finding 7: DEAD only if it barely moves (hit3 < this)
   wildWin: 10, wildHit5: 65, wildThinVol: 300000, wildThinWin: 12, wildThinHit5: 60,
   wildIlliquidVol: 50000,       // Finding 7: high-hit3 but volume under this => WILD (illiquid), not DEAD
@@ -25,10 +39,36 @@ const CLASSIFY = {
 };
 const RANK = { RUNNER: 0, SWING: 1, WATCH: 2, WILD: 3, MARGINAL: 4, DEAD: 5 };
 
-function classifyProfile(m, C = CLASSIFY) {
+/**
+ * Round-trip commission in fils/share for a stock being classified.
+ * Price-dependent, as reality is. Falls back to the real percentage formula if
+ * no config is supplied so a caller can never accidentally get a flat number.
+ *
+ * @param {number} priceFils
+ * @param {object} [opts]  { cfg: config.COMMISSION, market, day, referenceNotionalKd }
+ */
+function commissionFilsFor(priceFils, opts) {
+  if (priceFils == null || priceFils <= 0) return 0;
+  if (opts && opts.cfg) {
+    return COMMISSION.referenceRoundTripFils(priceFils, opts);
+  }
+  // Safety net: Main Market percentage model, no schedule available.
+  // 15 bps/side round trip = 0.003 x price fils/share. NEVER a flat constant.
+  return 0.003 * priceFils;
+}
+
+/**
+ * @param {object} m     median metrics { price, volume, target, win, tradableSwings, hit3, hit5 }
+ * @param {object} C     thresholds (CLASSIFY)
+ * @param {object} [opts] { cfg: config.COMMISSION, market, day, referenceNotionalKd }
+ *                        Supply cfg so cost is date- and segment-accurate. Without it
+ *                        the percentage fallback is used — still price-dependent.
+ */
+function classifyProfile(m, C = CLASSIFY, opts = undefined) {
   const { price, volume, target, win, tradableSwings, hit3, hit5 } = m;
-  const net = (target ?? 0) - C.commissionFils;
   if (price == null) return 'DEAD';
+  const commissionFils = commissionFilsFor(price, opts);
+  const net = (target ?? 0) - commissionFils;
 
   // 1) TRULY DEAD = does not move (Finding 7: volume alone no longer kills it)
   if ((hit3 ?? 0) < C.deadHit3) return 'DEAD';
@@ -36,8 +76,10 @@ function classifyProfile(m, C = CLASSIFY) {
   // 2) WILD-ILLIQUID = moves a lot (hit3 ok) but volume too thin to trade normally (GINS)
   if ((volume ?? 0) < C.wildIlliquidVol) return 'WILD';
 
-  // 3) can't even clear commission on a normal day
-  if ((target ?? 0) < C.commissionFils) return 'MARGINAL';
+  // 3) can't even clear commission on a normal day — now measured against the REAL
+  //    price-dependent cost, not a flat 2 fils. This is the line that wrongly
+  //    rejected KFIC and KHOT on 26-Jul.
+  if ((target ?? 0) < commissionFils) return 'MARGINAL';
 
   // 4) WILD = big erratic moves, poor reliability / thin
   if ((win ?? 0) < C.wildWin && (hit5 ?? 0) >= C.wildHit5) return 'WILD';
@@ -71,4 +113,4 @@ function classifyTrend(profile3m, profile1m) {
   return 'STABLE';
 }
 
-module.exports = { classifyProfile, classifyLane, classifyTrend, CLASSIFY, RANK };
+module.exports = { classifyProfile, classifyLane, classifyTrend, commissionFilsFor, CLASSIFY, RANK };
