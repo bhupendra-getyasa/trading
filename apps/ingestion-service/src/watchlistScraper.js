@@ -500,28 +500,147 @@ async function launch() {
   await context.route('**/ads/**', (r) => r.abort()).catch(() => {});
 }
 
-async function doLogin() {
-  const page = context.pages()[0] || (await context.newPage());
-  const { page: bp, target } = await programmaticLogin(context, page, log);
-  boardPage = bp;
-  boardTarget = target;
-  currentMarket = CONFIG.defaultMarket;
-  for (const pg of context.pages()) if (pg !== boardPage) await pg.close().catch(() => {});
-  await logMarketToggle(boardPage, log);
+// ─── LOGIN GUARD ─────────────────────────────────────────────────────────────
+// The terminal allows ONE concurrent session per user ID, and the broker locks
+// the ID after a small number of attempts (see the 1841841 lockout). Every
+// re-login also kills the session it is replacing, so an over-eager retry loop
+// feeds itself: probe fails -> re-login -> old session dies -> probe fails.
+//
+// Rules enforced here:
+//   * HARD CAP of 2 login attempts per Kuwait trading day, counted whether the
+//     attempt succeeded or not. A normal day needs exactly one.
+//   * The counter is PERSISTED to disk, so a crash-restart loop (pm2/systemd)
+//     cannot reset it back to zero and burn the ID.
+//   * A single in-flight promise, so overlapping cron ticks cannot fire two
+//     logins at once.
+//   * A cooldown between attempts.
+//   * Any broker message that looks like a lock / bad credentials disables
+//     logins permanently until a human clears the state file.
+const LOGIN_GUARD = {
+  maxPerDay: 2,
+  cooldownMs: 10 * 60 * 1000,          // min gap between two attempts
+  stateFile: path.resolve(__dirname, '.login-state.json'),
+  fatalMsg: /(locked|exceeded|maximum\s+number\s+of\s+login|already\s+(logged|active)|invalid\s+(user|password|credential)|1841841)/i,
+};
+
+let loginInFlight = null;
+
+function readLoginState() {
+  const today = kuwaitDate();
+  let st = { date: today, attempts: 0, lastAt: 0, disabled: null };
+  try {
+    const raw = JSON.parse(fs.readFileSync(LOGIN_GUARD.stateFile, 'utf8'));
+    if (raw && typeof raw === 'object') st = { ...st, ...raw };
+  } catch { /* first run, or unreadable — start clean */ }
+
+  // New Kuwait trading day resets the ATTEMPT budget. It does NOT clear a
+  // `disabled` flag: if the broker locked the ID, waiting for midnight does not
+  // unlock it — that needs a phone call, then resetLoginGuard().
+  if (st.date !== today) { st.date = today; st.attempts = 0; st.lastAt = 0; }
+  return st;
 }
 
-/** Is the board still there (session alive)? No navigation/refresh — just a probe. */
+function writeLoginState(st) {
+  try {
+    fs.writeFileSync(LOGIN_GUARD.stateFile, JSON.stringify(st, null, 2));
+  } catch (e) {
+    // If the counter cannot be persisted we must NOT keep logging in blindly.
+    throw new Error(`Cannot persist login state (${e.message}) — refusing to log in.`);
+  }
+}
+
+/** Manual reset. Call ONLY after the broker has confirmed the ID is unlocked. */
+function resetLoginGuard() {
+  writeLoginState({ date: kuwaitDate(), attempts: 0, lastAt: 0, disabled: null });
+  log('Login guard reset: attempts=0, disabled=null.');
+}
+
+/** Read-only view for the cron wrapper / health endpoint. */
+function loginStatus() {
+  const st = readLoginState();
+  return {
+    date: st.date,
+    attemptsUsed: st.attempts,
+    attemptsLeft: Math.max(0, LOGIN_GUARD.maxPerDay - st.attempts),
+    disabled: st.disabled,
+    lastAttempt: st.lastAt ? new Date(st.lastAt).toISOString() : null,
+  };
+}
+
+async function doLogin() {
+  if (loginInFlight) return loginInFlight;        // overlapping ticks share one attempt
+
+  const st = readLoginState();
+
+  if (st.disabled) {
+    throw new Error(`Login disabled: ${st.disabled}. Clear ${LOGIN_GUARD.stateFile} (or call resetLoginGuard()) once the ID is confirmed unlocked.`);
+  }
+  if (st.attempts >= LOGIN_GUARD.maxPerDay) {
+    throw new Error(`Daily login cap reached (${st.attempts}/${LOGIN_GUARD.maxPerDay}) for ${st.date} — no further attempts until the next Kuwait trading day.`);
+  }
+  const since = Date.now() - (st.lastAt || 0);
+  if (st.lastAt && since < LOGIN_GUARD.cooldownMs) {
+    throw new Error(`Login cooldown: ${Math.ceil((LOGIN_GUARD.cooldownMs - since) / 1000)}s remaining before attempt ${st.attempts + 1}/${LOGIN_GUARD.maxPerDay}.`);
+  }
+
+  // Count the attempt BEFORE trying it. A crash mid-login must still consume
+  // the budget, otherwise a restart loop gets unlimited tries.
+  st.attempts += 1;
+  st.lastAt = Date.now();
+  writeLoginState(st);
+  log(`Login attempt ${st.attempts}/${LOGIN_GUARD.maxPerDay} for ${st.date}`);
+
+  loginInFlight = (async () => {
+    // Always start from a clean browser/context. Re-using the old context keeps
+    // the dead session's cookies, which the terminal can treat as a duplicate
+    // login rather than a fresh one.
+    await launch();
+    const page = context.pages()[0] || (await context.newPage());
+    try {
+      const { page: bp, target } = await programmaticLogin(context, page, log);
+      boardPage = bp;
+      boardTarget = target;
+      currentMarket = CONFIG.defaultMarket;
+      for (const pg of context.pages()) if (pg !== boardPage) await pg.close().catch(() => {});
+      await logMarketToggle(boardPage, log);
+      deadProbes = 0;
+      log(`Login OK. Attempts used today: ${st.attempts}/${LOGIN_GUARD.maxPerDay}.`);
+    } catch (err) {
+      if (LOGIN_GUARD.fatalMsg.test(err.message || '')) {
+        const cur = readLoginState();
+        cur.disabled = `ACCOUNT LOCKED / CREDENTIALS REJECTED — ${err.message}`;
+        writeLoginState(cur);
+        log(`!! ${cur.disabled}`);
+        log('!! No further login attempts will be made. Call the broker (1841841), then run resetLoginGuard().');
+      }
+      await hardClose().catch(() => {});
+      throw err;
+    }
+  })().finally(() => { loginInFlight = null; });
+
+  return loginInFlight;
+}
+
+/** Is the board still there (session alive)? No navigation/refresh — just a probe.
+ *
+ *  The old 2000ms probe was too tight: a slow board at the open, a websocket
+ *  reconnect, or a market switch still in flight all read as "session lost" and
+ *  triggered a needless re-login — which then really did kill the session. Now
+ *  the probe waits longer AND needs three consecutive misses before it gives up. */
+let deadProbes = 0;
 async function sessionAlive() {
   if (!browser || !browser.isConnected() || !boardPage || boardPage.isClosed()) return false;
   const sel = `${CONFIG.bodyContainer} ${CONFIG.symbolCell}`;
-  const t = await findTableFrame(boardPage, sel, 2000);
-  if (t) { boardTarget = t; return true; }
-  return false;
+  const t = await findTableFrame(boardPage, sel, 10000);
+  if (t) { boardTarget = t; deadProbes = 0; return true; }
+  deadProbes += 1;
+  log(`  board probe missed (${deadProbes}/3)`);
+  return deadProbes < 3;
 }
 
 async function ensureReady() {
-  if (!browser || !browser.isConnected()) { log('Launching browser + logging in...'); await launch(); await doLogin(); return; }
-  if (!(await sessionAlive())) { log('Session lost — re-logging in...'); await doLogin(); }
+  if (!browser || !browser.isConnected()) { log('No browser — logging in...'); await doLogin(); return; }
+  if (!(await sessionAlive())) { log('Session lost — re-logging in...'); deadProbes = 0; await doLogin(); }
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -624,4 +743,4 @@ async function closeScraper() {
   // Note: the DB pool is owned by @trading/shared — do NOT end it here.
 }
 
-module.exports = { scrapeStocks, saveQuotes, closeScraper };
+module.exports = { scrapeStocks, saveQuotes, closeScraper, loginStatus, resetLoginGuard };
